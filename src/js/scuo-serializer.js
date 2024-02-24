@@ -78,7 +78,7 @@
  * 
  * Limits:
  * 
- * - Maximum value for size in uint32. For instance this means an Array, a Set,
+ * - Maximum value for size is uint32. For instance this means an Array, a Set,
  *   a Map, an ArrayBuffer etc. can't have more than 2^32 items.
  * 
  * TODO:
@@ -267,12 +267,13 @@ let refCounter = 1;
 
 /*******************************************************************************
  * 
- * A "size" is always uint32-compatible value. The serialized value has
+ * A large Uint is always a positive integer (can be zero), assumed to be
+ * large, i.e. > NUMSAFECHARS -- but not necessarily. The serialized value has
  * always at least one digit, and is always followed by a separator.
  * 
  * */
 
-const serializeSize = i => {
+const strFromLargeUint = i => {
     let r = 0, s = '';
     for (;;) {
         r = i % NUMSAFECHARS;
@@ -284,7 +285,7 @@ const serializeSize = i => {
     return s + SEPARATORCHAR;
 };
 
-const deserializeSize = ( ) => {
+const deserializeLargeUint = ( ) => {
     let c = readStr.charCodeAt(readPtr++);
     let out = charCodeToInt[c];
     let m = NUMSAFECHARS;
@@ -300,7 +301,7 @@ const deserializeSize = ( ) => {
  * Methods specific to ArrayBuffer objects to serialize optimally according to
  * the content of the buffer.
  * 
- * Number of output bytes per input int32 (4-byte) value:
+ * In sparse mode, number of output bytes per input int32 (4-byte) value:
  * [v === zero]: 1 byte
  * [-NUMSAFECHARS < v < NUMSAFECHARS]: 1 byte + 1 digit
  * [v <= -NUMSAFECHARS]: 1 byte + number of digits + 1 byte (separator)
@@ -339,7 +340,7 @@ const analyzeArrayBuffer = arrbuf => {
             return { contentByteLength, dense: true };
         }
     }
-    return { contentByteLength, dense: false };
+    return { contentByteLength, dense: false, sparseSize };
 };
 
 const denseArrayBufferToStr = (arrbuf, end) => {
@@ -388,11 +389,10 @@ const denseArrayBufferToStr = (arrbuf, end) => {
     return textDecoder.decode(output);
 };
 
-const BASE88_POW0 = Math.pow(NUMSAFECHARS, 0);
-const BASE88_POW1 = Math.pow(NUMSAFECHARS, 1);
-const BASE88_POW2 = Math.pow(NUMSAFECHARS, 2);
-const BASE88_POW3 = Math.pow(NUMSAFECHARS, 3);
-const BASE88_POW4 = Math.pow(NUMSAFECHARS, 4);
+const BASE88_POW1 = NUMSAFECHARS;
+const BASE88_POW2 = NUMSAFECHARS * BASE88_POW1;
+const BASE88_POW3 = NUMSAFECHARS * BASE88_POW2;
+const BASE88_POW4 = NUMSAFECHARS * BASE88_POW3;
 
 const denseArrayBufferFromStr = (base88str, arrbuf) => {
     const end = base88str.length;
@@ -402,20 +402,20 @@ const denseArrayBufferFromStr = (base88str, arrbuf) => {
     const uint32arr = new Uint32Array(arrbuf, 0, uin32len);
     let j = 0, v = 0;
     for ( let i = 0; i < n; i += 5 ) {
-        v  = BASE88_POW0 * charCodeToInt[base88str.charCodeAt(i+0)];
-        v += BASE88_POW1 * charCodeToInt[base88str.charCodeAt(i+1)];
-        v += BASE88_POW2 * charCodeToInt[base88str.charCodeAt(i+2)];
-        v += BASE88_POW3 * charCodeToInt[base88str.charCodeAt(i+3)];
-        v += BASE88_POW4 * charCodeToInt[base88str.charCodeAt(i+4)];
+        v  = charCodeToInt[base88str.charCodeAt(i+0)];
+        v += charCodeToInt[base88str.charCodeAt(i+1)] * BASE88_POW1;
+        v += charCodeToInt[base88str.charCodeAt(i+2)] * BASE88_POW2;
+        v += charCodeToInt[base88str.charCodeAt(i+3)] * BASE88_POW3;
+        v += charCodeToInt[base88str.charCodeAt(i+4)] * BASE88_POW4;
         uint32arr[j++] = v;
     }
     if ( m === 0 ) { return; }
-    v  = BASE88_POW0 * charCodeToInt[base88str.charCodeAt(n+0)]
-       + BASE88_POW1 * charCodeToInt[base88str.charCodeAt(n+1)];
+    v  = charCodeToInt[base88str.charCodeAt(n+0)] +
+         charCodeToInt[base88str.charCodeAt(n+1)] * BASE88_POW1;
     if ( m > 2 ) {
-        v += BASE88_POW2 * charCodeToInt[base88str.charCodeAt(n+2)];
+        v += charCodeToInt[base88str.charCodeAt(n+2)] * BASE88_POW2;
         if ( m > 3 ) {
-            v += BASE88_POW3 * charCodeToInt[base88str.charCodeAt(n+3)];
+            v += charCodeToInt[base88str.charCodeAt(n+3)] * BASE88_POW3;
         }
     }
     const uint8arr = new Uint8Array(arrbuf, j << 2);
@@ -431,7 +431,7 @@ const denseArrayBufferFromStr = (base88str, arrbuf) => {
 };
 
 const sparseArrayBufferToStr = (arrbuf, end) => {
-    const parts = [ serializeSize(end) ];
+    const parts = [ strFromLargeUint(end) ];
     const int32len = end >>> 2;
     const int32arr = new Int32Array(arrbuf, 0, int32len);
     for ( let i = 0; i < int32len; i++ ) {
@@ -439,13 +439,13 @@ const sparseArrayBufferToStr = (arrbuf, end) => {
         if ( n === 0 ) {
             parts.push(C_ZERO);
         } else if ( n >= NUMSAFECHARS ) {
-            parts.push(C_INTEGER_LARGE_POS + serializeSize(n));
+            parts.push(C_INTEGER_LARGE_POS + strFromLargeUint(n));
         } else if ( n > 0 ) {
             parts.push(C_INTEGER_SMALL_POS + intToChar[n]);
         } else if ( n > -NUMSAFECHARS ) {
             parts.push(C_INTEGER_SMALL_NEG + intToChar[-n]);
         } else {
-            parts.push(C_INTEGER_LARGE_NEG + serializeSize(-n));
+            parts.push(C_INTEGER_LARGE_NEG + strFromLargeUint(-n));
         }
     }
     const int8len = end & 0b11;
@@ -456,13 +456,13 @@ const sparseArrayBufferToStr = (arrbuf, end) => {
             if ( n === 0 ) {
                 parts.push(C_ZERO);
             } else if ( n >= NUMSAFECHARS ) {
-                parts.push(C_INTEGER_LARGE_POS + serializeSize(n));
+                parts.push(C_INTEGER_LARGE_POS + strFromLargeUint(n));
             } else if ( n > 0 ) {
                 parts.push(C_INTEGER_SMALL_POS + intToChar[n]);
             } else if ( n > -NUMSAFECHARS ) {
                 parts.push(C_INTEGER_SMALL_NEG + intToChar[-n]);
             } else {
-                parts.push(C_INTEGER_LARGE_NEG + serializeSize(-n));
+                parts.push(C_INTEGER_LARGE_NEG + strFromLargeUint(-n));
             }
         }
     }
@@ -472,7 +472,7 @@ const sparseArrayBufferToStr = (arrbuf, end) => {
 const sparseArrayBufferFromStr = (str, arrbuf) => {
     const save = { readStr, readPtr };
     readStr = str; readPtr = 0;
-    const end = deserializeSize();
+    const end = deserializeLargeUint();
     const int32len = end >>> 2;
     const int32arr = new Int32Array(arrbuf, 0, int32len);
     for ( let i = 0; i < int32len; i++ ) {
@@ -487,10 +487,10 @@ const sparseArrayBufferFromStr = (str, arrbuf) => {
                 int32arr[i] = -charCodeToInt[readStr.charCodeAt(readPtr++)];
                 break;
             case I_INTEGER_LARGE_POS:
-                int32arr[i] = deserializeSize();
+                int32arr[i] = deserializeLargeUint();
                 break;
             case I_INTEGER_LARGE_NEG:
-                int32arr[i] = -deserializeSize();
+                int32arr[i] = -deserializeLargeUint();
                 break;
         }
     }
@@ -509,10 +509,10 @@ const sparseArrayBufferFromStr = (str, arrbuf) => {
                     int8arr[i] = -charCodeToInt[readStr.charCodeAt(readPtr++)];
                     break;
                 case I_INTEGER_LARGE_POS:
-                    int8arr[i] = deserializeSize();
+                    int8arr[i] = deserializeLargeUint();
                     break;
                 case I_INTEGER_LARGE_NEG:
-                    int8arr[i] = -deserializeSize();
+                    int8arr[i] = -deserializeLargeUint();
                     break;
             }
         }
@@ -543,24 +543,24 @@ const _serialize = data => {
             if ( length < NUMSAFECHARS ) {
                 writeBuffer.push(C_STRING_SMALL + intToChar[length], data);
             } else {
-                writeBuffer.push(C_STRING_LARGE + serializeSize(length), data);
+                writeBuffer.push(C_STRING_LARGE + strFromLargeUint(length), data);
             }
             return;
         }
         case I_NUMBER:
             if ( isInteger(data) ) {
                 if ( data >= NUMSAFECHARS ) {
-                    writeBuffer.push(C_INTEGER_LARGE_POS + serializeSize(data));
+                    writeBuffer.push(C_INTEGER_LARGE_POS + strFromLargeUint(data));
                 } else if ( data > 0 ) {
                     writeBuffer.push(C_INTEGER_SMALL_POS + intToChar[data]);
                 } else if ( data > -NUMSAFECHARS ) {
                     writeBuffer.push(C_INTEGER_SMALL_NEG + intToChar[-data]);
                 } else {
-                    writeBuffer.push(C_INTEGER_LARGE_NEG + serializeSize(-data));
+                    writeBuffer.push(C_INTEGER_LARGE_NEG + strFromLargeUint(-data));
                 }
             } else {
                 const s = `${data}`;
-                writeBuffer.push(C_FLOAT + serializeSize(s.length), s);
+                writeBuffer.push(C_FLOAT + strFromLargeUint(s.length) + s);
             }
             return;
         case I_BOOL:
@@ -586,7 +586,7 @@ const _serialize = data => {
     // Reference to composite types
     const ref = writeRefs.get(data);
     if ( ref !== undefined ) {
-        writeBuffer.push(C_REFERENCE + serializeSize(ref));
+        writeBuffer.push(C_REFERENCE + strFromLargeUint(ref));
         return;
     }
     // Remember reference
@@ -598,7 +598,7 @@ const _serialize = data => {
             if ( size < NUMSAFECHARS ) {
                 writeBuffer.push(C_ARRAY_SMALL + intToChar[size]);
             } else {
-                writeBuffer.push(C_ARRAY_LARGE + serializeSize(size));
+                writeBuffer.push(C_ARRAY_LARGE + strFromLargeUint(size));
             }
             for ( const v of data ) {
                 _serialize(v);
@@ -610,7 +610,7 @@ const _serialize = data => {
             if ( size < NUMSAFECHARS ) {
                 writeBuffer.push(C_SET_SMALL + intToChar[size]);
             } else {
-                writeBuffer.push(C_SET_LARGE + serializeSize(size));
+                writeBuffer.push(C_SET_LARGE + strFromLargeUint(size));
             }
             for ( const v of data ) {
                 _serialize(v);
@@ -622,7 +622,7 @@ const _serialize = data => {
             if ( size < NUMSAFECHARS ) {
                 writeBuffer.push(C_MAP_SMALL + intToChar[size]);
             } else {
-                writeBuffer.push(C_MAP_LARGE + serializeSize(size));
+                writeBuffer.push(C_MAP_LARGE + strFromLargeUint(size));
             }
             for ( const [ k, v ] of data ) {
                 _serialize(k);
@@ -632,7 +632,7 @@ const _serialize = data => {
         }
         case I_ARRAYBUFFER: {
             const byteLength = data.byteLength;
-            writeBuffer.push(C_ARRAYBUFFER + serializeSize(byteLength));
+            writeBuffer.push(C_ARRAYBUFFER + strFromLargeUint(byteLength));
             _serialize(data.maxByteLength);
             const arrbuffDetails = analyzeArrayBuffer(data);
             _serialize(arrbuffDetails.dense);
@@ -654,13 +654,13 @@ const _serialize = data => {
         case I_FLOAT64ARRAY:
             writeBuffer.push(
                 typeToSerializedChar[xtypeName],
-                serializeSize(data.byteOffset),
-                serializeSize(data.length)
+                strFromLargeUint(data.byteOffset),
+                strFromLargeUint(data.length)
             );
             _serialize(data.buffer);
             return;
         case I_DATAVIEW:
-            writeBuffer.push(C_DATAVIEW, serializeSize(data.byteOffset), serializeSize(data.byteLength));
+            writeBuffer.push(C_DATAVIEW, strFromLargeUint(data.byteOffset), strFromLargeUint(data.byteLength));
             _serialize(data.buffer);
             return;
         default: {
@@ -669,7 +669,7 @@ const _serialize = data => {
             if ( size < NUMSAFECHARS ) {
                 writeBuffer.push(C_SMALL_OBJECT + intToChar[size]);
             } else {
-                writeBuffer.push(C_LARGE_OBJECT + serializeSize(size));
+                writeBuffer.push(C_LARGE_OBJECT + strFromLargeUint(size));
             }
             for ( const key of keys ) {
                 _serialize(key);
@@ -691,7 +691,7 @@ const _deserialize = ( ) => {
         case I_STRING_LARGE: {
             const size = type === I_STRING_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
-                : deserializeSize();
+                : deserializeLargeUint();
             const beg = readPtr;
             readPtr += size;
             return readStr.slice(beg, readPtr);
@@ -703,9 +703,9 @@ const _deserialize = ( ) => {
         case I_INTEGER_SMALL_NEG:
             return -charCodeToInt[readStr.charCodeAt(readPtr++)];
         case I_INTEGER_LARGE_POS:
-            return deserializeSize();
+            return deserializeLargeUint();
         case I_INTEGER_LARGE_NEG:
-            return -deserializeSize();
+            return -deserializeLargeUint();
         case I_BOOL_FALSE:
             return false;
         case I_BOOL_TRUE:
@@ -715,7 +715,7 @@ const _deserialize = ( ) => {
         case I_UNDEFINED:
             return;
         case I_FLOAT: {
-            const size = deserializeSize();
+            const size = deserializeLargeUint();
             const beg = readPtr;
             readPtr += size;
             return parseFloat(readStr.slice(beg, readPtr));
@@ -730,7 +730,7 @@ const _deserialize = ( ) => {
             return new Date(time);
         }
         case I_REFERENCE: {
-            const ref = deserializeSize();
+            const ref = deserializeLargeUint();
             return readRefs.get(ref);
         }
         case I_SMALL_OBJECT:
@@ -738,7 +738,7 @@ const _deserialize = ( ) => {
             const out = {};
             let size = type === I_SMALL_OBJECT
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
-                : deserializeSize();
+                : deserializeLargeUint();
             while ( size-- ) {
                 const k = _deserialize();
                 const v = _deserialize();
@@ -752,7 +752,7 @@ const _deserialize = ( ) => {
             const out = [];
             let size = type === I_ARRAY_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
-                : deserializeSize();
+                : deserializeLargeUint();
             while ( size-- ) {
                 out.push(_deserialize());
             }
@@ -764,7 +764,7 @@ const _deserialize = ( ) => {
             const out = new Set();
             let size = type === I_SET_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
-                : deserializeSize();
+                : deserializeLargeUint();
             while ( size-- ) {
                 out.add(_deserialize());
             }
@@ -776,7 +776,7 @@ const _deserialize = ( ) => {
             const out = new Map();
             let size = type === I_MAP_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
-                : deserializeSize();
+                : deserializeLargeUint();
             while ( size-- ) {
                 const k = _deserialize();
                 const v = _deserialize();
@@ -786,7 +786,7 @@ const _deserialize = ( ) => {
             return out;
         }
         case I_ARRAYBUFFER: {
-            const byteLength = deserializeSize();
+            const byteLength = deserializeLargeUint();
             const maxByteLength = _deserialize();
             let options;
             if ( maxByteLength !== 0 && maxByteLength !== byteLength ) {
@@ -813,8 +813,8 @@ const _deserialize = ( ) => {
         case I_FLOAT32ARRAY:
         case I_FLOAT64ARRAY:
         case I_DATAVIEW: {
-            const byteOffset = deserializeSize();
-            const length = deserializeSize();
+            const byteOffset = deserializeLargeUint();
+            const length = deserializeLargeUint();
             const arrayBuffer = _deserialize();
             const ctor = toArrayBufferViewConstructor[`${type}`];
             const out = new ctor(arrayBuffer, byteOffset, length);
@@ -829,10 +829,10 @@ const _deserialize = ( ) => {
 
 /*******************************************************************************
  * 
- * LZ4 block compression.decompression
+ * LZ4 block compression/decompression
  * 
  * Imported from:
- * https://github.com/gorhill/lz4-wasm/blob/master/dist/lz4-block-codec-js.js
+ * https://github.com/gorhill/lz4-wasm/blob/8995cdef7b/dist/lz4-block-codec-js.js
  * 
  * Customized to avoid external dependencies as I entertain the idea of
  * spinning off the serializer as a standalone utility for all to use.
@@ -1104,8 +1104,8 @@ const defaultConfig = {
 };
 
 const validateConfig = {
-    maxThreadCount: val => val >= 1,
-    threadTTL: val => val >= 0,
+    maxThreadCount: val => val > 0,
+    threadTTL: val => val > 0,
 };
 
 const currentConfig = Object.assign({}, defaultConfig);
