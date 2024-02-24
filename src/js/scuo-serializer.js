@@ -38,7 +38,7 @@
  * cloneable data to any storage. Not all storages support storing binary data,
  * but all storages support storing Unicode strings.
  * 
- * Structured cloneable types:
+ * Structured-cloneable types:
  * https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm#supported_types
  * 
  * ----------------+------------------+------------------+----------------------
