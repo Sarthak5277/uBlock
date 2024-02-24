@@ -92,6 +92,8 @@
 const VERSION = 1;
 const SEPARATORCHAR = ' ';
 const SEPARATORCHARCODE = SEPARATORCHAR.charCodeAt(0);
+const SENTINELCHAR = '!';
+const SENTINELCHARCODE = SENTINELCHAR.charCodeAt(0);
 const MAGICPREFIX = `UOSC_${VERSION}${SEPARATORCHAR}`;
 const MAGICLZ4PREFIX = `UOSC/lz4_${VERSION}${SEPARATORCHAR}`;
 const FAILMARK = Number.MAX_SAFE_INTEGER;
@@ -253,6 +255,7 @@ const toArrayBufferViewConstructor = {
 
 /******************************************************************************/
 
+const textDecoder = new TextDecoder();
 const isInteger = Number.isInteger;
 
 const writeRefs = new Map();
@@ -287,13 +290,13 @@ const strFromLargeUint = i => {
 
 const deserializeLargeUint = ( ) => {
     let c = readStr.charCodeAt(readPtr++);
-    let out = charCodeToInt[c];
-    let m = NUMSAFECHARS;
+    let n = charCodeToInt[c];
+    let m = 1;
     while ( (c = readStr.charCodeAt(readPtr++)) !== SEPARATORCHARCODE ) {
-        out += charCodeToInt[c] * m;
         m *= NUMSAFECHARS;
+        n += m * charCodeToInt[c];
     }
-    return out;
+    return n;
 };
 
 /*******************************************************************************
@@ -302,42 +305,41 @@ const deserializeLargeUint = ( ) => {
  * the content of the buffer.
  * 
  * In sparse mode, number of output bytes per input int32 (4-byte) value:
- * [v === zero]: 1 byte
- * [-NUMSAFECHARS < v < NUMSAFECHARS]: 1 byte + 1 digit
- * [v <= -NUMSAFECHARS]: 1 byte + number of digits + 1 byte (separator)
- * [v >=  NUMSAFECHARS]: 1 byte + number of digits + 1 byte (separator)
+ * [v === zero]: 1 byte (separator)
+ * [v !== zero]: n digits + 1 byte (separator)
  * 
  * */
 
+const sparseValueLen = v => v !== 0
+    ? (Math.log2(v) / BITS_PER_SAFECHARS | 0) + 2
+    : 1;
+
 const analyzeArrayBuffer = arrbuf => {
     const byteLength = arrbuf.byteLength;
-    const int32len = byteLength >>> 2;
-    const int32arr = new Int32Array(arrbuf, 0, int32len);
+    const uint32len = byteLength >>> 2;
+    const uint32arr = new Uint32Array(arrbuf, 0, uint32len);
     let notzeroCount = 0;
-    for ( let i = int32len-1; i >= 0; i-- ) {
-        if ( int32arr[i] === 0 ) { continue; }
+    for ( let i = uint32len-1; i >= 0; i-- ) {
+        if ( uint32arr[i] === 0 ) { continue; }
         notzeroCount = i + 1;
         break;
     }
-    const end = notzeroCount + 1 <= int32len ? notzeroCount << 2 : byteLength;
-    const endInt32 = end >>> 2;
-    const remInt32 = end & 0b11;
-    const denseSize = endInt32 * 5 + (remInt32 ? remInt32 + 1 : 0);
+    const end = notzeroCount + 1 <= uint32len ? notzeroCount << 2 : byteLength;
+    const endUint32 = end >>> 2;
+    const remUint8 = end & 0b11;
+    const denseSize = endUint32 * 5 + (remUint8 ? remUint8 + 1 : 0);
     let sparseSize = 0;
-    for ( let i = 0, n = endInt32; i < n; i++ ) {
-        const v = int32arr[i];
-        if ( v === 0 ) {
-            sparseSize += 1;
-        } else {
-            sparseSize += 2;
-            if ( v >= NUMSAFECHARS ) {
-                sparseSize += (Math.log2( v) / BITS_PER_SAFECHARS | 0) + 1;
-            } else if ( v <= -NUMSAFECHARS ) {
-                sparseSize += (Math.log2(-v) / BITS_PER_SAFECHARS | 0) + 1;
-            }
-        }
+    for ( let i = 0; i < endUint32; i++ ) {
+        sparseSize += sparseValueLen(uint32arr[i]);
         if ( sparseSize > denseSize ) {
             return { end, dense: true, denseSize };
+        }
+    }
+    if ( remUint8 !== 0 ) {
+        sparseSize += 1; // sentinel
+        const uint8arr = new Uint8Array(arrbuf, endUint32 << 2);
+        for ( let i = 0; i < remUint8; i++ ) {
+            sparseSize += sparseValueLen(uint8arr[i]);
         }
     }
     return { end, dense: false, sparseSize };
@@ -385,7 +387,6 @@ const denseArrayBufferToStr = (arrbuf, details) => {
             }
         }
     }
-    const textDecoder = new TextDecoder();
     return textDecoder.decode(output);
 };
 
@@ -394,28 +395,28 @@ const BASE88_POW2 = NUMSAFECHARS * BASE88_POW1;
 const BASE88_POW3 = NUMSAFECHARS * BASE88_POW2;
 const BASE88_POW4 = NUMSAFECHARS * BASE88_POW3;
 
-const denseArrayBufferFromStr = (base88str, arrbuf) => {
-    const end = base88str.length;
+const denseArrayBufferFromStr = (denseStr, arrbuf) => {
+    const end = denseStr.length;
     const m = end % 5;
     const n = end - m;
     const uin32len = n / 5 * 4 >>> 2;
     const uint32arr = new Uint32Array(arrbuf, 0, uin32len);
     let j = 0, v = 0;
     for ( let i = 0; i < n; i += 5 ) {
-        v  = charCodeToInt[base88str.charCodeAt(i+0)];
-        v += charCodeToInt[base88str.charCodeAt(i+1)] * BASE88_POW1;
-        v += charCodeToInt[base88str.charCodeAt(i+2)] * BASE88_POW2;
-        v += charCodeToInt[base88str.charCodeAt(i+3)] * BASE88_POW3;
-        v += charCodeToInt[base88str.charCodeAt(i+4)] * BASE88_POW4;
+        v  = charCodeToInt[denseStr.charCodeAt(i+0)];
+        v += charCodeToInt[denseStr.charCodeAt(i+1)] * BASE88_POW1;
+        v += charCodeToInt[denseStr.charCodeAt(i+2)] * BASE88_POW2;
+        v += charCodeToInt[denseStr.charCodeAt(i+3)] * BASE88_POW3;
+        v += charCodeToInt[denseStr.charCodeAt(i+4)] * BASE88_POW4;
         uint32arr[j++] = v;
     }
     if ( m === 0 ) { return; }
-    v  = charCodeToInt[base88str.charCodeAt(n+0)] +
-         charCodeToInt[base88str.charCodeAt(n+1)] * BASE88_POW1;
+    v  = charCodeToInt[denseStr.charCodeAt(n+0)] +
+         charCodeToInt[denseStr.charCodeAt(n+1)] * BASE88_POW1;
     if ( m > 2 ) {
-        v += charCodeToInt[base88str.charCodeAt(n+2)] * BASE88_POW2;
+        v += charCodeToInt[denseStr.charCodeAt(n+2)] * BASE88_POW2;
         if ( m > 3 ) {
-            v += charCodeToInt[base88str.charCodeAt(n+3)] * BASE88_POW3;
+            v += charCodeToInt[denseStr.charCodeAt(n+3)] * BASE88_POW3;
         }
     }
     const uint8arr = new Uint8Array(arrbuf, j << 2);
@@ -432,93 +433,81 @@ const denseArrayBufferFromStr = (base88str, arrbuf) => {
 
 const sparseArrayBufferToStr = (arrbuf, details) => {
     const end = details.end;
-    const parts = [ strFromLargeUint(end) ];
-    const int32len = end >>> 2;
-    const int32arr = new Int32Array(arrbuf, 0, int32len);
-    for ( let i = 0; i < int32len; i++ ) {
-        const n = int32arr[i];
-        if ( n === 0 ) {
-            parts.push(C_ZERO);
-        } else if ( n >= NUMSAFECHARS ) {
-            parts.push(C_INTEGER_LARGE_POS + strFromLargeUint(n));
-        } else if ( n > 0 ) {
-            parts.push(C_INTEGER_SMALL_POS + intToChar[n]);
-        } else if ( n > -NUMSAFECHARS ) {
-            parts.push(C_INTEGER_SMALL_NEG + intToChar[-n]);
-        } else {
-            parts.push(C_INTEGER_LARGE_NEG + strFromLargeUint(-n));
-        }
-    }
-    const int8len = end & 0b11;
-    if ( int8len !== 0 ) {
-        const int8arr = new Int8Array(arrbuf, end - int8len, int8len);
-        for ( let i = 0; i < int8len; i++ ) {
-            const n = int8arr[i];
-            if ( n === 0 ) {
-                parts.push(C_ZERO);
-            } else if ( n >= NUMSAFECHARS ) {
-                parts.push(C_INTEGER_LARGE_POS + strFromLargeUint(n));
-            } else if ( n > 0 ) {
-                parts.push(C_INTEGER_SMALL_POS + intToChar[n]);
-            } else if ( n > -NUMSAFECHARS ) {
-                parts.push(C_INTEGER_SMALL_NEG + intToChar[-n]);
-            } else {
-                parts.push(C_INTEGER_LARGE_NEG + strFromLargeUint(-n));
+    const uint8out = new Uint8Array(details.sparseSize);
+    const uint32len = end >>> 2;
+    const uint32arr = new Uint32Array(arrbuf, 0, uint32len);
+    let j = 0, n = 0, r = 0;
+    for ( let i = 0; i < uint32len; i++ ) {
+        n = uint32arr[i];
+        if ( n !== 0 ) {
+            for (;;) {
+                r = n % NUMSAFECHARS;
+                uint8out[j++] = intToCharCode[r];
+                n -= r;
+                if ( n === 0 ) { break; }
+                n /= NUMSAFECHARS;
             }
         }
+        uint8out[j++] = SEPARATORCHARCODE;
     }
-    return parts.join('');
+    const uint8rem = end & 0b11;
+    if ( uint8rem !== 0 ) {
+        uint8out[j++] = SENTINELCHARCODE;
+        const uint8arr = new Uint8Array(arrbuf, end - uint8rem, uint8rem);
+        for ( let i = 0; i < uint8rem; i++ ) {
+            n = uint8arr[i];
+            if ( n !== 0 ) {
+                for (;;) {
+                    r = n % NUMSAFECHARS;
+                    uint8out[j++] = intToCharCode[r];
+                    n -= r;
+                    if ( n === 0 ) { break; }
+                    n /= NUMSAFECHARS;
+                }
+            }
+            uint8out[j++] = SEPARATORCHARCODE;
+        }
+    }
+    return textDecoder.decode(uint8out);
 };
 
-const sparseArrayBufferFromStr = (str, arrbuf) => {
-    const save = { readStr, readPtr };
-    readStr = str; readPtr = 0;
-    const end = deserializeLargeUint();
-    const int32len = end >>> 2;
-    const int32arr = new Int32Array(arrbuf, 0, int32len);
-    for ( let i = 0; i < int32len; i++ ) {
-        const type = charCodeToInt[readStr.charCodeAt(readPtr++)];
-        switch ( type ) {
-            case I_ZERO:
-                break;
-            case I_INTEGER_SMALL_POS:
-                int32arr[i] = charCodeToInt[readStr.charCodeAt(readPtr++)];
-                break;
-            case I_INTEGER_SMALL_NEG:
-                int32arr[i] = -charCodeToInt[readStr.charCodeAt(readPtr++)];
-                break;
-            case I_INTEGER_LARGE_POS:
-                int32arr[i] = deserializeLargeUint();
-                break;
-            case I_INTEGER_LARGE_NEG:
-                int32arr[i] = -deserializeLargeUint();
-                break;
+const sparseArrayBufferFromStr = (sparseStr, arrbuf) => {
+    const sparseLen = sparseStr.length;
+    const end = arrbuf.byteLength;
+    const uint32len = end >>> 2;
+    const uint32arr = new Uint32Array(arrbuf, 0, uint32len);
+    let i = 0, j = 0, c = 0, n = 0, m = 0;
+    for ( ; j < sparseLen; i++ ) {
+        c = sparseStr.charCodeAt(j++);
+        if ( c === SEPARATORCHARCODE ) { continue; }
+        if ( c === SENTINELCHARCODE ) { break; }
+        n = charCodeToInt[c];
+        m = 1;
+        for (;;) {
+            c = sparseStr.charCodeAt(j++);
+            if ( c === SEPARATORCHARCODE ) { break; }
+            m *= NUMSAFECHARS;
+            n += m * charCodeToInt[c];
         }
+        uint32arr[i] = n;
     }
-    const int8len = end & 0b11;
-    if ( int8len !== 0 ) {
-        const int8arr = new Int8Array(arrbuf, end - int8len, int8len);
-        for ( let i = 0; i < int8len; i++ ) {
-            const type = charCodeToInt[readStr.charCodeAt(readPtr++)];
-            switch ( type ) {
-                case I_ZERO:
-                    break;
-                case I_INTEGER_SMALL_POS:
-                    int8arr[i] = charCodeToInt[readStr.charCodeAt(readPtr++)];
-                    break;
-                case I_INTEGER_SMALL_NEG:
-                    int8arr[i] = -charCodeToInt[readStr.charCodeAt(readPtr++)];
-                    break;
-                case I_INTEGER_LARGE_POS:
-                    int8arr[i] = deserializeLargeUint();
-                    break;
-                case I_INTEGER_LARGE_NEG:
-                    int8arr[i] = -deserializeLargeUint();
-                    break;
+    if ( c === SENTINELCHARCODE ) {
+        i <<= 2;
+        const uint8arr = new Uint8Array(arrbuf, i);
+        for ( ; j < sparseLen; i++ ) {
+            c = sparseStr.charCodeAt(j++);
+            if ( c === SEPARATORCHARCODE ) { continue; }
+            n = charCodeToInt[c];
+            m = 1;
+            for (;;) {
+                c = sparseStr.charCodeAt(j++);
+                if ( c === SEPARATORCHARCODE ) { break; }
+                m *= NUMSAFECHARS;
+                n += m * charCodeToInt[c];
             }
+            uint8arr[i] = n;
         }
     }
-    ({ readStr, readPtr } = save);
 };
 
 /******************************************************************************/
@@ -641,7 +630,7 @@ const _serialize = data => {
                 ? denseArrayBufferToStr(data, arrbuffDetails)
                 : sparseArrayBufferToStr(data, arrbuffDetails);
             _serialize(str);
-            console.log(`arrbuf size=${byteLength} content size=${arrbuffDetails.end} dense=${arrbuffDetails.dense} serialized size=${str.length}`);
+            console.log(`arrbuf size=${byteLength} content size=${arrbuffDetails.end} dense=${arrbuffDetails.dense} array size=${arrbuffDetails.dense ? arrbuffDetails.denseSize : arrbuffDetails.sparseSize} serialized size=${str.length}`);
             return;
         }
         case I_INT8ARRAY:
@@ -1074,8 +1063,7 @@ export const deserialize = s => {
         readStr = '';
         const lz4Util = new LZ4BlockJS();
         const uint8ArrayAfter = lz4Util.decode(lz4.data, 0, lz4.size);
-        const decoder = new TextDecoder();
-        s = decoder.decode(new Uint8Array(uint8ArrayAfter));
+        s = textDecoder.decode(new Uint8Array(uint8ArrayAfter));
     }
     if ( s.startsWith(MAGICPREFIX) === false ) { return; }
     refCounter = 1;
