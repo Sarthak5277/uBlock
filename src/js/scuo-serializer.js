@@ -319,12 +319,12 @@ const analyzeArrayBuffer = arrbuf => {
         notzeroCount = i + 1;
         break;
     }
-    const contentByteLength = notzeroCount + 1 <= int32len ? notzeroCount << 2 : byteLength;
-    const contentInt32Len = contentByteLength >>> 2;
-    const contentInt32Rem = contentByteLength & 0b11;
-    const denseSize = contentInt32Len * 5 + (contentInt32Rem ? contentInt32Rem + 1 : 0);
+    const end = notzeroCount + 1 <= int32len ? notzeroCount << 2 : byteLength;
+    const endInt32 = end >>> 2;
+    const remInt32 = end & 0b11;
+    const denseSize = endInt32 * 5 + (remInt32 ? remInt32 + 1 : 0);
     let sparseSize = 0;
-    for ( let i = 0, n = contentInt32Len; i < n; i++ ) {
+    for ( let i = 0, n = endInt32; i < n; i++ ) {
         const v = int32arr[i];
         if ( v === 0 ) {
             sparseSize += 1;
@@ -337,19 +337,19 @@ const analyzeArrayBuffer = arrbuf => {
             }
         }
         if ( sparseSize > denseSize ) {
-            return { contentByteLength, dense: true };
+            return { end, dense: true, denseSize };
         }
     }
-    return { contentByteLength, dense: false, sparseSize };
+    return { end, dense: false, sparseSize };
 };
 
-const denseArrayBufferToStr = (arrbuf, end) => {
+const denseArrayBufferToStr = (arrbuf, details) => {
+    const end = details.end;
     const m = end % 4;
     const n = end - m;
     const uin32len = n >>> 2;
     const uint32arr = new Uint32Array(arrbuf, 0, uin32len);
-    const outlen = uin32len * 5 + (m ? m + 1 : 0);
-    const output = new Uint8Array(outlen);
+    const output = new Uint8Array(details.denseSize);
     let j = 0, v = 0;
     for ( let i = 0; i < uin32len; i++ ) {
         v = uint32arr[i];
@@ -430,7 +430,8 @@ const denseArrayBufferFromStr = (base88str, arrbuf) => {
     }
 };
 
-const sparseArrayBufferToStr = (arrbuf, end) => {
+const sparseArrayBufferToStr = (arrbuf, details) => {
+    const end = details.end;
     const parts = [ strFromLargeUint(end) ];
     const int32len = end >>> 2;
     const int32arr = new Int32Array(arrbuf, 0, int32len);
@@ -637,10 +638,10 @@ const _serialize = data => {
             const arrbuffDetails = analyzeArrayBuffer(data);
             _serialize(arrbuffDetails.dense);
             const str = arrbuffDetails.dense
-                ? denseArrayBufferToStr(data, arrbuffDetails.contentByteLength)
-                : sparseArrayBufferToStr(data, arrbuffDetails.contentByteLength);
+                ? denseArrayBufferToStr(data, arrbuffDetails)
+                : sparseArrayBufferToStr(data, arrbuffDetails);
             _serialize(str);
-            console.log(`arrbuf size=${byteLength} content size=${arrbuffDetails.contentByteLength} dense=${arrbuffDetails.dense} serialized size=${str.length}`);
+            console.log(`arrbuf size=${byteLength} content size=${arrbuffDetails.end} dense=${arrbuffDetails.dense} serialized size=${str.length}`);
             return;
         }
         case I_INT8ARRAY:
