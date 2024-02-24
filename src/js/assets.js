@@ -528,12 +528,11 @@ function getAssetSourceRegistry() {
         assetSourceRegistryPromise = cacheStorage.get(
             'assetSourceRegistry'
         ).then(bin => {
-            if (
-                bin instanceof Object &&
-                bin.assetSourceRegistry instanceof Object
-            ) {
-                assetSourceRegistry = bin.assetSourceRegistry;
-                return assetSourceRegistry;
+            if ( bin instanceof Object ) {
+                if ( bin.assetSourceRegistry instanceof Object ) {
+                    assetSourceRegistry = bin.assetSourceRegistry;
+                    return assetSourceRegistry;
+                }
             }
             return assets.fetchText(
                 µb.assetsBootstrapLocation || µb.assetsJsonPath
@@ -673,39 +672,26 @@ let assetCacheRegistryPromise;
 let assetCacheRegistry = {};
 
 function getAssetCacheRegistry() {
-    if ( assetCacheRegistryPromise === undefined ) {
-        assetCacheRegistryPromise = cacheStorage.get(
-            'assetCacheRegistry'
-        ).then(bin => {
-            if (
-                bin instanceof Object &&
-                bin.assetCacheRegistry instanceof Object
-            ) {
-                if ( Object.keys(assetCacheRegistry).length === 0 ) {
-                    assetCacheRegistry = bin.assetCacheRegistry;
-                } else {
-                    console.error(
-                        'getAssetCacheRegistry(): assetCacheRegistry reassigned!'
-                    );
-                    if (
-                        Object.keys(bin.assetCacheRegistry).sort().join() !==
-                        Object.keys(assetCacheRegistry).sort().join()
-                    ) {
-                        console.error(
-                            'getAssetCacheRegistry(): assetCacheRegistry changes overwritten!'
-                        );
-                    }
-                }
-            }
-            return assetCacheRegistry;
-        });
+    if ( assetCacheRegistryPromise !== undefined ) {
+        return assetCacheRegistryPromise;
     }
-
+    assetCacheRegistryPromise = cacheStorage.get(
+        'assetCacheRegistry'
+    ).then(bin => {
+        if ( bin instanceof Object === false ) { return; }
+        if ( bin.assetCacheRegistry instanceof Object === false ) { return; }
+        if ( Object.keys(assetCacheRegistry).length !== 0 ) {
+            return console.error('getAssetCacheRegistry(): assetCacheRegistry reassigned!');
+        }
+        assetCacheRegistry = bin.assetCacheRegistry;
+    }).then(( ) =>
+        assetCacheRegistry
+    );
     return assetCacheRegistryPromise;
 }
 
 const saveAssetCacheRegistry = (( ) => {
-    const save = function() {
+    const save = ( ) => {
         timer.off();
         cacheStorage.set({ assetCacheRegistry });
     };
@@ -726,7 +712,9 @@ async function assetCacheRead(assetKey, updateReadTime = false) {
     const reportBack = function(content) {
         if ( content instanceof Blob ) { content = ''; }
         const details = { assetKey, content };
-        if ( content === '' ) { details.error = 'ENOTFOUND'; }
+        if ( content === '' || content === undefined ) {
+            details.error = 'ENOTFOUND';
+        }
         return details;
     };
 
@@ -742,17 +730,11 @@ async function assetCacheRead(assetKey, updateReadTime = false) {
         ) + ' ms';
     }
 
-    if (
-        bin instanceof Object === false ||
-        bin.hasOwnProperty(internalKey) === false
-    ) {
-        return reportBack('');
-    }
+    if ( bin instanceof Object === false ) { return reportBack(''); }
+    if ( bin.hasOwnProperty(internalKey) === false ) { return reportBack(''); }
 
     const entry = assetCacheRegistry[assetKey];
-    if ( entry === undefined ) {
-        return reportBack('');
-    }
+    if ( entry === undefined ) { return reportBack(''); }
 
     entry.readTime = Date.now();
     if ( updateReadTime ) {
@@ -762,34 +744,22 @@ async function assetCacheRead(assetKey, updateReadTime = false) {
     return reportBack(bin[internalKey]);
 }
 
-async function assetCacheWrite(assetKey, details) {
-    let content = '';
-    let options = {};
-    if ( typeof details === 'string' ) {
-        content = details;
-    } else if ( details instanceof Object ) {
-        content = details.content || '';
-        options = details;
-    }
-
-    if ( content === '' ) {
+async function assetCacheWrite(assetKey, content, options = {}) {
+    if ( content === '' || content === undefined ) {
         return assetCacheRemove(assetKey);
     }
 
-    const cacheDict = await getAssetCacheRegistry();
+    const { resourceTime, url } = options;
 
-    let entry = cacheDict[assetKey];
-    if ( entry === undefined ) {
-        entry = cacheDict[assetKey] = {};
-    }
-    entry.writeTime = entry.readTime = Date.now();
-    entry.resourceTime = options.resourceTime || 0;
-    if ( typeof options.url === 'string' ) {
-        entry.remoteURL = options.url;
-    }
-    cacheStorage.set({
-        assetCacheRegistry,
-        [`cache/${assetKey}`]: content
+    getAssetCacheRegistry().then(cacheDict => {
+        const entry = cacheDict[assetKey] || {};
+        cacheDict[assetKey] = entry;
+        entry.writeTime = entry.readTime = Date.now();
+        entry.resourceTime = resourceTime || 0;
+        if ( typeof url === 'string' ) {
+            entry.remoteURL = url;
+        }
+        cacheStorage.set({ assetCacheRegistry, [`cache/${assetKey}`]: content });
     });
 
     const result = { assetKey, content };
@@ -805,11 +775,10 @@ async function assetCacheRemove(pattern) {
     const removedEntries = [];
     const removedContent = [];
     for ( const assetKey in cacheDict ) {
-        if ( pattern instanceof RegExp && !pattern.test(assetKey) ) {
-            continue;
-        }
-        if ( typeof pattern === 'string' && assetKey !== pattern ) {
-            continue;
+        if ( pattern instanceof RegExp ) {
+            if ( pattern.test(assetKey) === false ) { continue; }
+        } else if ( typeof pattern === 'string' ) {
+            if ( assetKey !== pattern ) { continue; }
         }
         removedEntries.push(assetKey);
         removedContent.push('cache/' + assetKey);
@@ -980,8 +949,7 @@ assets.get = async function(assetKey, options = {}) {
         }
         if ( details.content === '' ) { continue; }
         if ( reIsExternalPath.test(contentURL) && options.dontCache !== true ) {
-            assetCacheWrite(assetKey, {
-                content: details.content,
+            assetCacheWrite(assetKey, details.content, {
                 url: contentURL,
                 silent: options.silent === true,
             });
@@ -1057,8 +1025,7 @@ async function getRemote(assetKey, options = {}) {
         }
 
         // Success
-        assetCacheWrite(assetKey, {
-            content: result.content,
+        assetCacheWrite(assetKey, result.content, {
             url: contentURL,
             resourceTime: result.resourceTime || 0,
         });
@@ -1097,6 +1064,17 @@ assets.put = async function(assetKey, content) {
     return reIsUserAsset.test(assetKey)
         ? await saveUserAsset(assetKey, content)
         : await assetCacheWrite(assetKey, content);
+};
+
+/******************************************************************************/
+
+assets.toCache = async function(assetKey, content) {
+    return assetCacheWrite(assetKey, content);
+};
+
+assets.fromCache = async function(assetKey) {
+    const details = await assetCacheRead(assetKey);
+    return details && details.content;
 };
 
 /******************************************************************************/
@@ -1300,8 +1278,7 @@ async function diffUpdater() {
                     'Diff-Path',
                     'Diff-Expires',
                 ]);
-                assetCacheWrite(data.assetKey, {
-                    content: data.text,
+                assetCacheWrite(data.assetKey, data.text, {
                     resourceTime: metadata.lastModified || 0,
                 });
                 metadata.diffUpdated = true;

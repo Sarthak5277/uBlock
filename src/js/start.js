@@ -252,19 +252,19 @@ const onUserSettingsReady = fetched => {
 //   Wait for removal of invalid cached data to be completed.
 
 const onCacheSettingsReady = async (fetched = {}) => {
+    let selfieIsInvalid = false;
     if ( fetched.compiledMagic !== µb.systemSettings.compiledMagic ) {
         µb.compiledFormatChanged = true;
-        µb.selfieIsInvalid = true;
+        selfieIsInvalid = true;
         ubolog(`Serialized format of static filter lists changed`);
     }
     if ( fetched.selfieMagic !== µb.systemSettings.selfieMagic ) {
-        µb.selfieIsInvalid = true;
+        selfieIsInvalid = true;
         ubolog(`Serialized format of selfie changed`);
     }
-    if ( µb.selfieIsInvalid ) {
-        µb.selfieManager.destroy();
-        cacheStorage.set(µb.systemSettings);
-    }
+    if ( selfieIsInvalid === false ) { return; }
+    µb.selfieManager.destroy();
+    cacheStorage.set(µb.systemSettings);
 };
 
 /******************************************************************************/

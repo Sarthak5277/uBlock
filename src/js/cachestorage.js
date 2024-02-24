@@ -28,6 +28,7 @@
 import lz4Codec from './lz4.js';
 import µb from './background.js';
 import webext from './webext.js';
+import * as scuo from './scuo-serializer.js';
 
 /******************************************************************************/
 
@@ -68,19 +69,38 @@ const storageReadyPromise = new Promise(resolve => {
 
 const cacheStorage = {
     name: 'browser.storage.local',
-    get(...args) {
-        return storageReadyPromise.then(( ) =>
-            storageLocal.get(...args).catch(reason => {
-                console.log(reason);
-            })
-        );
+    async get(...args) {
+        await storageReadyPromise;
+        const bin = await storageLocal.get(...args).catch(reason => {
+            console.log(reason);
+        });
+        if ( bin instanceof Object === false ) { return bin; }
+        const promises = [];
+        for ( const key of Object.keys(bin) ) {
+            if ( scuo.canDeserialize(bin[key]) === false ) { continue; }
+            promises.push(this.unserialize(bin, key));
+        }
+        if ( promises.length !== 0 ) {
+            await Promise.all(promises);
+        }
+        return bin;
     },
-    set(...args) {
-        return storageReadyPromise.then(( ) =>
-            storageLocal.set(...args).catch(reason => {
-                console.log(reason);
-            })
-        );
+    async set(keyvalStore) {
+        const keys = Object.keys(keyvalStore);
+        if ( keys.length === 0 ) { return; }
+        await storageReadyPromise;
+        const serializedStore = {};
+        const promises = [];
+        for ( const key of keys ) {
+            serializedStore[key] = keyvalStore[key];
+            promises.push(this.serialize(serializedStore, key));
+        }
+        if ( promises.length !== 0 ) {
+            await Promise.all(promises);
+        }
+        return storageLocal.set(serializedStore).catch(reason => {
+            console.log(reason);
+        });
     },
     remove(...args) {
         return storageReadyPromise.then(( ) =>
@@ -95,6 +115,21 @@ const cacheStorage = {
                 console.log(reason);
             })
         );
+    },
+    serialize(bin, key) {
+        const options = {
+            compress: false && µb.hiddenSettings.cacheStorageCompression,
+            thread: true,
+        };
+        return scuo.serializeAsync(bin[key], options).then(result => {
+            bin[key] = result;
+        });
+    },
+    unserialize(bin, key) {
+        const options = { thread: false };
+        return scuo.deserializeAsync(bin[key], options).then(result => {
+            bin[key] = result;
+        });
     },
     select: function(selectedBackend) {
         let actualBackend = selectedBackend;
