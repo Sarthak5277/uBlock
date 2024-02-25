@@ -96,8 +96,10 @@ const shouldCache = bin => {
 
 const cacheStorage = (( ) => {
 
+    const LARGE = 16384;
+
     const compress = async (key, data) => {
-        const isLarge = typeof data === 'string' && data.length >= 65536;
+        const isLarge = typeof data === 'string' && data.length >= LARGE;
         const after = await scuo.serializeAsync(data, {
             compress: isLarge,
             multithreaded: isLarge,
@@ -109,7 +111,7 @@ const cacheStorage = (( ) => {
         if ( scuo.canDeserialize(data) === false ) {
             return { key, data };
         }
-        const isLarge = data.length >= 65536;
+        const isLarge = data.length >= LARGE;
         const after = await scuo.deserializeAsync(data, {
             multithreaded: isLarge,
         });
@@ -118,6 +120,7 @@ const cacheStorage = (( ) => {
 
     return {
         name: 'browser.storage.local',
+
         get(arg) {
             const keys = arg;
             return cacheAPI.get(keysFromGetArg(arg)).then(bin => {
@@ -142,6 +145,7 @@ const cacheStorage = (( ) => {
                 ubolog(reason);
             });
         },
+
         async set(keyvalStore) {
             const keys = Object.keys(keyvalStore);
             if ( keys.length === 0 ) { return; }
@@ -159,21 +163,21 @@ const cacheStorage = (( ) => {
                 ubolog(reason);
             });
         },
+
         remove(...args) {
             cacheAPI.remove(...args);
             return storageLocal.remove(...args).catch(reason => {
                 ubolog(reason);
             });
         },
+
         clear(...args) {
             cacheAPI.clear(...args);
             return storageLocal.clear(...args).catch(reason => {
                 ubolog(reason);
             });
         },
-        select: async function() {
-            return 'browser.storage.local';
-        },
+
         error: undefined
     };
 })();
@@ -191,7 +195,7 @@ if ( storageLocal.getBytesInUse instanceof Function ) {
  * 
  * Cache API
  * 
- * May not be available/populated in incognito mode.
+ * May not be available/populated in private/incognito mode.
  * 
  * */
 
