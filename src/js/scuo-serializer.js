@@ -256,6 +256,7 @@ const toArrayBufferViewConstructor = {
 /******************************************************************************/
 
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
 const isInteger = Number.isInteger;
 
 const writeRefs = new Map();
@@ -267,6 +268,22 @@ let readPtr = 0;
 let readEnd = 0;
 
 let refCounter = 1;
+
+let uint8Input = null;
+
+const uint8InputFromAsciiStr = s => {
+    if ( uint8Input === null || uint8Input.length < s.length ) {
+        uint8Input = new Uint8Array(s.length + 0x03FF & ~0x03FF);
+    }
+    textEncoder.encodeInto(s, uint8Input);
+    return uint8Input;
+};
+
+const isInstanceOf = (o, s) => {
+    return typeof o === 'object' && o !== null && (
+        s === 'Object' || Object.prototype.toString.call(o) === `[object ${s}]`
+    );
+};
 
 /*******************************************************************************
  * 
@@ -396,6 +413,7 @@ const BASE88_POW3 = NUMSAFECHARS * BASE88_POW2;
 const BASE88_POW4 = NUMSAFECHARS * BASE88_POW3;
 
 const denseArrayBufferFromStr = (denseStr, arrbuf) => {
+    const input = uint8InputFromAsciiStr(denseStr);
     const end = denseStr.length;
     const m = end % 5;
     const n = end - m;
@@ -403,20 +421,20 @@ const denseArrayBufferFromStr = (denseStr, arrbuf) => {
     const uint32arr = new Uint32Array(arrbuf, 0, uin32len);
     let j = 0, v = 0;
     for ( let i = 0; i < n; i += 5 ) {
-        v  = charCodeToInt[denseStr.charCodeAt(i+0)];
-        v += charCodeToInt[denseStr.charCodeAt(i+1)] * BASE88_POW1;
-        v += charCodeToInt[denseStr.charCodeAt(i+2)] * BASE88_POW2;
-        v += charCodeToInt[denseStr.charCodeAt(i+3)] * BASE88_POW3;
-        v += charCodeToInt[denseStr.charCodeAt(i+4)] * BASE88_POW4;
+        v  = charCodeToInt[input[i+0]];
+        v += charCodeToInt[input[i+1]] * BASE88_POW1;
+        v += charCodeToInt[input[i+2]] * BASE88_POW2;
+        v += charCodeToInt[input[i+3]] * BASE88_POW3;
+        v += charCodeToInt[input[i+4]] * BASE88_POW4;
         uint32arr[j++] = v;
     }
     if ( m === 0 ) { return; }
-    v  = charCodeToInt[denseStr.charCodeAt(n+0)] +
-         charCodeToInt[denseStr.charCodeAt(n+1)] * BASE88_POW1;
+    v  = charCodeToInt[input[n+0]] +
+         charCodeToInt[input[n+1]] * BASE88_POW1;
     if ( m > 2 ) {
-        v += charCodeToInt[denseStr.charCodeAt(n+2)] * BASE88_POW2;
+        v += charCodeToInt[input[n+2]] * BASE88_POW2;
         if ( m > 3 ) {
-            v += charCodeToInt[denseStr.charCodeAt(n+3)] * BASE88_POW3;
+            v += charCodeToInt[input[n+3]] * BASE88_POW3;
         }
     }
     const uint8arr = new Uint8Array(arrbuf, j << 2);
@@ -473,18 +491,19 @@ const sparseArrayBufferToStr = (arrbuf, details) => {
 
 const sparseArrayBufferFromStr = (sparseStr, arrbuf) => {
     const sparseLen = sparseStr.length;
+    const input = uint8InputFromAsciiStr(sparseStr);
     const end = arrbuf.byteLength;
     const uint32len = end >>> 2;
     const uint32arr = new Uint32Array(arrbuf, 0, uint32len);
     let i = 0, j = 0, c = 0, n = 0, m = 0;
     for ( ; j < sparseLen; i++ ) {
-        c = sparseStr.charCodeAt(j++);
+        c = input[j++];
         if ( c === SEPARATORCHARCODE ) { continue; }
         if ( c === SENTINELCHARCODE ) { break; }
         n = charCodeToInt[c];
         m = 1;
         for (;;) {
-            c = sparseStr.charCodeAt(j++);
+            c = input[j++];
             if ( c === SEPARATORCHARCODE ) { break; }
             m *= NUMSAFECHARS;
             n += m * charCodeToInt[c];
@@ -495,12 +514,12 @@ const sparseArrayBufferFromStr = (sparseStr, arrbuf) => {
         i <<= 2;
         const uint8arr = new Uint8Array(arrbuf, i);
         for ( ; j < sparseLen; i++ ) {
-            c = sparseStr.charCodeAt(j++);
+            c = input[j++];
             if ( c === SEPARATORCHARCODE ) { continue; }
             n = charCodeToInt[c];
             m = 1;
             for (;;) {
-                c = sparseStr.charCodeAt(j++);
+                c = input[j++];
                 if ( c === SEPARATORCHARCODE ) { break; }
                 m *= NUMSAFECHARS;
                 n += m * charCodeToInt[c];
@@ -630,7 +649,7 @@ const _serialize = data => {
                 ? denseArrayBufferToStr(data, arrbuffDetails)
                 : sparseArrayBufferToStr(data, arrbuffDetails);
             _serialize(str);
-            console.log(`arrbuf size=${byteLength} content size=${arrbuffDetails.end} dense=${arrbuffDetails.dense} array size=${arrbuffDetails.dense ? arrbuffDetails.denseSize : arrbuffDetails.sparseSize} serialized size=${str.length}`);
+            //console.log(`arrbuf size=${byteLength} content size=${arrbuffDetails.end} dense=${arrbuffDetails.dense} array size=${arrbuffDetails.dense ? arrbuffDetails.denseSize : arrbuffDetails.sparseSize} serialized size=${str.length}`);
             return;
         }
         case I_INT8ARRAY:
@@ -751,27 +770,29 @@ const _deserialize = ( ) => {
         }
         case I_SET_SMALL:
         case I_SET_LARGE: {
-            const out = new Set();
+            const entries = [];
             let size = type === I_SET_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
                 : deserializeLargeUint();
             while ( size-- ) {
-                out.add(_deserialize());
+                entries.push(_deserialize());
             }
+            const out = new Set(entries);
             readRefs.set(refCounter++, out);
             return out;
         }
         case I_MAP_SMALL:
         case I_MAP_LARGE: {
-            const out = new Map();
+            const entries = [];
             let size = type === I_MAP_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
                 : deserializeLargeUint();
             while ( size-- ) {
                 const k = _deserialize();
                 const v = _deserialize();
-                out.set(k, v);
+                entries.push([ k, v ]);
             }
+            const out = new Map(entries);
             readRefs.set(refCounter++, out);
             return out;
         }
@@ -858,7 +879,7 @@ class LZ4BlockJS {
             this.hashTable = new Int32Array(65536);
         }
         this.hashTable.fill(-65536);
-        if ( iBuf instanceof ArrayBuffer ) {
+        if ( isInstanceOf(iBuf, 'ArrayBuffer') ) {
             iBuf = new Uint8Array(iBuf);
         }
         const oLen = oOffset + this.encodeBound(iLen);
@@ -1003,17 +1024,17 @@ class LZ4BlockJS {
         return oBuf;
     }
     encode(input, outputOffset) {
-        if ( input instanceof ArrayBuffer ) {
+        if ( isInstanceOf(input, 'ArrayBuffer') ) {
             input = new Uint8Array(input);
-        } else if ( input instanceof Uint8Array === false ) {
+        } else if ( isInstanceOf(input, 'Uint8Array') === false ) {
             throw new TypeError();
         }
         return this.encodeBlock(input, outputOffset);
     }
     decode(input, inputOffset, outputSize) {
-        if ( input instanceof ArrayBuffer ) {
+        if ( isInstanceOf(input, 'ArrayBuffer') ) {
             input = new Uint8Array(input);
-        } else if ( input instanceof Uint8Array === false ) {
+        } else if ( isInstanceOf(input, 'Uint8Array') === false ) {
             throw new TypeError();
         }
         return this.decodeBlock(input, inputOffset, outputSize);
@@ -1073,6 +1094,7 @@ export const deserialize = s => {
     const data = _deserialize();
     readRefs.clear();
     readStr = '';
+    uint8Input = null;
     if ( readPtr === FAILMARK ) { return; }
     return data;
 };
@@ -1133,7 +1155,7 @@ class Thread {
                 worker = new Worker('js/scuo-serializer.js', { type: 'module' });
                 worker.onmessage = ev => {
                     const msg = ev.data;
-                    if ( msg instanceof Object === false ) { return; }
+                    if ( isInstanceOf(msg, 'Object') === false ) { return; }
                     if ( msg.what === 'ready!' ) {
                         worker.onmessage = ev => { this.onmessage(ev); };
                         worker.onerror = null;
@@ -1244,7 +1266,7 @@ const threads = {
 };
 
 export async function serializeAsync(data, options = {}) {
-    if ( options.thread !== true ) {
+    if ( options.multithreaded !== true ) {
         return serialize(data, options);
     }
     const result = await threads.serialize(data, options);
@@ -1253,7 +1275,7 @@ export async function serializeAsync(data, options = {}) {
 }
 
 export async function deserializeAsync(data, options = {}) {
-    if ( options.thread !== true ) {
+    if ( options.multithreaded !== true ) {
         return deserialize(data, options);
     }
     const result = await threads.deserialize(data, options);
@@ -1267,7 +1289,7 @@ export async function deserializeAsync(data, options = {}) {
  * 
  * */
 
-if ( globalThis.WorkerGlobalScope && globalThis instanceof globalThis.WorkerGlobalScope ) {
+if ( isInstanceOf(globalThis, 'DedicatedWorkerGlobalScope') ) {
     globalThis.onmessage = ev => {
         const msg = ev.data;
         switch ( msg.what ) {

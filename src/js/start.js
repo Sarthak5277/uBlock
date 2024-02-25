@@ -305,10 +305,7 @@ const onHiddenSettingsReady = async ( ) => {
     }
 
     // Maybe override default cache storage
-    µb.supportStats.cacheBackend = await cacheStorage.select(
-        µb.hiddenSettings.cacheStorageAPI
-    );
-    ubolog(`Backend storage for cache will be ${µb.supportStats.cacheBackend}`);
+    µb.supportStats.cacheBackend = 'browser.storage.local';
 };
 
 /******************************************************************************/

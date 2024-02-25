@@ -156,7 +156,7 @@ staticExtFilteringEngine.toSelfie = function() {
 };
 
 staticExtFilteringEngine.fromSelfie = async function(selfie) {
-    if ( selfie instanceof Object === false ) { return false; }
+    if ( typeof selfie !== 'object' || selfie === null ) { return false; }
     cosmeticFilteringEngine.fromSelfie(selfie.cosmetic);
     httpheaderFilteringEngine.fromSelfie(selfie.httpHeaders);
     htmlFilteringEngine.fromSelfie(selfie.html);

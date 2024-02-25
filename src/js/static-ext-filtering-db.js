@@ -150,7 +150,7 @@ const StaticExtFilteringHostnameDB = class {
     }
 
     fromSelfie(selfie) {
-        if ( selfie === undefined ) { return; }
+        if ( typeof selfie !== 'object' || selfie === null ) { return; }
         this.hostnameToSlotIdMap = selfie.hostnameToSlotIdMap;
         // Regex-based lookup available in uBO 1.47.0 and above
         if ( selfie.regexToSlotIdMap ) {

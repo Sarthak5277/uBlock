@@ -1268,6 +1268,7 @@ onBroadcast(msg => {
         ]);
         lz4Codec.relinquish();
         µb.selfieIsInvalid = false;
+        ubolog(`Selfie was created`);
     };
 
     const loadMain = async function() {
@@ -1307,6 +1308,7 @@ onBroadcast(msg => {
         if ( µb.selfieIsInvalid === false ) {
             io.remove(/^selfie\//);
             µb.selfieIsInvalid = true;
+            ubolog(`Selfie was removed`);
         }
         if ( µb.wakeupReason === 'createSelfie' ) {
             µb.wakeupReason = '';

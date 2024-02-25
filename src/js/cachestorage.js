@@ -28,6 +28,7 @@
 import lz4Codec from './lz4.js';
 import µb from './background.js';
 import webext from './webext.js';
+import { ubolog } from './console.js';
 import * as scuo from './scuo-serializer.js';
 
 /******************************************************************************/
@@ -62,112 +63,275 @@ const STORAGE_NAME = 'uBlock0CacheStorage';
 // Default to webext storage.
 const storageLocal = webext.storage.local;
 
-let storageReadyResolve;
-const storageReadyPromise = new Promise(resolve => {
-    storageReadyResolve = resolve;
-});
 
-const cacheStorage = {
-    name: 'browser.storage.local',
-    async get(...args) {
-        await storageReadyPromise;
-        const bin = await storageLocal.get(...args).catch(reason => {
-            console.log(reason);
-        });
-        if ( bin instanceof Object === false ) { return bin; }
-        const promises = [];
-        for ( const key of Object.keys(bin) ) {
-            if ( scuo.canDeserialize(bin[key]) === false ) { continue; }
-            promises.push(this.unserialize(bin, key));
-        }
-        if ( promises.length !== 0 ) {
-            await Promise.all(promises);
-        }
-        return bin;
-    },
-    async set(keyvalStore) {
-        const keys = Object.keys(keyvalStore);
-        if ( keys.length === 0 ) { return; }
-        await storageReadyPromise;
-        const serializedStore = {};
-        const promises = [];
-        for ( const key of keys ) {
-            serializedStore[key] = keyvalStore[key];
-            promises.push(this.serialize(serializedStore, key));
-        }
-        if ( promises.length !== 0 ) {
-            await Promise.all(promises);
-        }
-        return storageLocal.set(serializedStore).catch(reason => {
-            console.log(reason);
-        });
-    },
-    remove(...args) {
-        return storageReadyPromise.then(( ) =>
-            storageLocal.remove(...args).catch(reason => {
-                console.log(reason);
-            })
-        );
-    },
-    clear(...args) {
-        return storageReadyPromise.then(( ) =>
-            storageLocal.clear(...args).catch(reason => {
-                console.log(reason);
-            })
-        );
-    },
-    serialize(bin, key) {
-        const options = {
-            compress: false && µb.hiddenSettings.cacheStorageCompression,
-            thread: true,
-        };
-        return scuo.serializeAsync(bin[key], options).then(result => {
-            bin[key] = result;
-        });
-    },
-    unserialize(bin, key) {
-        const options = { thread: false };
-        return scuo.deserializeAsync(bin[key], options).then(result => {
-            bin[key] = result;
-        });
-    },
-    select: function(selectedBackend) {
-        let actualBackend = selectedBackend;
-        if ( actualBackend === undefined || actualBackend === 'unset' ) {
-            actualBackend = vAPI.webextFlavor.soup.has('firefox')
-                ? 'indexedDB'
-                : 'browser.storage.local';
-        }
-        if ( actualBackend === 'indexedDB' ) {
-            return selectIDB().then(success => {
-                if ( success || selectedBackend === 'indexedDB' ) {
-                    clearWebext();
-                    storageReadyResolve();
-                    return 'indexedDB';
-                }
-                clearIDB();
-                storageReadyResolve();
-                return 'browser.storage.local';
-            });
-        }
-        if ( actualBackend === 'browser.storage.local' ) {
-            clearIDB();
-        }
-        storageReadyResolve();
-        return Promise.resolve('browser.storage.local');
-        
-    },
-    error: undefined
+const keysFromGetArg = arg => {
+    if ( arg === null ) { return []; }
+    const type = typeof arg;
+    if ( type === 'string' ) { return [ arg ]; }
+    if ( Array.isArray(arg) ) { return arg; }
+    if ( type !== 'object' ) { return; }
+    return Object.keys(arg);
 };
+
+// Cache API is subject to quota so we will use it only for what is key
+// performance-wise
+const shouldCache = bin => {
+    const out = {};
+    for ( const key of Object.keys(bin) ) {
+        if ( key.startsWith('cache/') ) {
+            if ( /^cache\/(compiled|selfie)\//.test(key) === false ) { continue; }
+        }
+        out[key] = bin[key];
+    }
+    return out;
+};
+
+/*******************************************************************************
+ * 
+ * Extension storage
+ * 
+ * Always available.
+ * 
+ * */
+
+const cacheStorage = (( ) => {
+
+    const compress = async (key, data) => {
+        const isLarge = typeof data === 'string' && data.length >= 65536;
+        const after = await scuo.serializeAsync(data, {
+            compress: isLarge,
+            multithreaded: isLarge,
+        });
+        return { key, data: after };
+    };
+
+    const decompress = async (key, data) => {
+        if ( scuo.canDeserialize(data) === false ) {
+            return { key, data };
+        }
+        const isLarge = data.length >= 65536;
+        const after = await scuo.deserializeAsync(data, {
+            multithreaded: isLarge,
+        });
+        return { key, data: after };
+    };
+
+    return {
+        name: 'browser.storage.local',
+        get(arg) {
+            const keys = arg;
+            return cacheAPI.get(keysFromGetArg(arg)).then(bin => {
+                if ( bin !== undefined ) { return bin; }
+                return storageLocal.get(keys).catch(reason => {
+                    ubolog(reason);
+                });
+            }).then(bin => {
+                if ( bin instanceof Object === false ) { return bin; }
+                const promises = [];
+                for ( const key of Object.keys(bin) ) {
+                    promises.push(decompress(key, bin[key]));
+                }
+                return Promise.all(promises);
+            }).then(results => {
+                const bin = {};
+                for ( const { key, data } of results ) {
+                    bin[key] = data;
+                }
+                return bin;
+            }).catch(reason => {
+                ubolog(reason);
+            });
+        },
+        async set(keyvalStore) {
+            const keys = Object.keys(keyvalStore);
+            if ( keys.length === 0 ) { return; }
+            const promises = [];
+            for ( const key of keys ) {
+                promises.push(compress(key, keyvalStore[key]));
+            }
+            const results = await Promise.all(promises);
+            const serializedStore = {};
+            for ( const { key, data } of results ) {
+                serializedStore[key] = data;
+            }
+            cacheAPI.set(shouldCache(serializedStore));
+            return storageLocal.set(serializedStore).catch(reason => {
+                ubolog(reason);
+            });
+        },
+        remove(...args) {
+            cacheAPI.remove(...args);
+            return storageLocal.remove(...args).catch(reason => {
+                ubolog(reason);
+            });
+        },
+        clear(...args) {
+            cacheAPI.clear(...args);
+            return storageLocal.clear(...args).catch(reason => {
+                ubolog(reason);
+            });
+        },
+        select: async function() {
+            return 'browser.storage.local';
+        },
+        error: undefined
+    };
+})();
 
 // Not all platforms support getBytesInUse
 if ( storageLocal.getBytesInUse instanceof Function ) {
     cacheStorage.getBytesInUse = function(...args) {
         return storageLocal.getBytesInUse(...args).catch(reason => {
-            console.log(reason);
+            ubolog(reason);
         });
     };
 }
+
+/*******************************************************************************
+ * 
+ * Cache API
+ * 
+ * May not be available/populated in incognito mode.
+ * 
+ * */
+
+const cacheAPI = (( ) => {
+    const cacheStoragePromise = new Promise(resolve => {
+        if ( globalThis.caches instanceof Object === false ) {
+            resolve(null);
+        }
+        resolve(globalThis.caches.open(STORAGE_NAME).catch(reason => {
+            ubolog(reason);
+        }));
+    });
+
+    const urlPrefix = 'https://ublock0.invalid/';
+
+    const keyToURL = key =>
+        `${urlPrefix}${encodeURIComponent(key)}`;
+
+    const urlToKey = url =>
+        decodeURIComponent(url.slice(urlPrefix.length));
+
+    const getOne = async key => {
+        const cache = await cacheStoragePromise;
+        if ( cache === null ) { return; }
+        return cache.match(keyToURL(key)).then(response => {
+            if ( response instanceof Response === false ) { return; }
+            return response.text();
+        }).then(text => {
+            if ( text === undefined ) { return; }
+            return { key, text };
+        }).catch(reason => {
+            ubolog(reason);
+        });
+    };
+
+    const getAll = async ( ) => {
+        const cache = await cacheStoragePromise;
+        if ( cache === null ) { return; }
+        return cache.keys().then(requests => {
+            const promises = [];
+            for ( const request of requests ) {
+                promises.push(getOne(urlToKey(request.url)));
+            }
+            return Promise.all(promises);
+        }).then(responses => {
+            const bin = {};
+            for ( const response of responses ) {
+                if ( response === undefined ) { continue; }
+                bin[response.key] = response.text;
+            }
+            return bin;
+        }).catch(reason => {
+            ubolog(reason);
+        });
+    };
+
+    const setOne = async (key, text) => {
+        if ( text === undefined ) { return removeOne(key); }
+        const blob = new Blob([ text ], { type: 'text/plain;charset=utf-8'});
+        const cache = await cacheStoragePromise;
+        if ( cache === null ) { return; }
+        return cache
+            .put(keyToURL(key), new Response(blob))
+            .catch(reason => {
+                ubolog(reason);
+            });
+    };
+
+    const removeOne = async key => {
+        const cache = await cacheStoragePromise;
+        if ( cache === null ) { return; }
+        return cache.delete(keyToURL(key)).catch(reason => {
+            ubolog(reason);
+        });
+    };
+
+    return {
+        async get(arg) {
+            const keys = keysFromGetArg(arg);
+            if ( keys === undefined ) { return; }
+            if ( keys.length === 0 ) {
+                return getAll();
+            }
+            const bin = {};
+            const toFetch = keys.slice();
+            const hasDefault = typeof arg === 'object' && Array.isArray(arg) === false;
+            for ( let i = 0; i < toFetch.length; i++ ) {
+                const key = toFetch[i];
+                if ( hasDefault && arg[key] !== undefined ) {
+                    bin[key] = arg[key];
+                }
+                toFetch[i] = getOne(key);
+            }
+            const responses = await Promise.all(toFetch);
+            for ( const response of responses ) {
+                if ( response instanceof Object === false ) { continue; }
+                const { key, text } = response;
+                if ( typeof key !== 'string' ) { continue; }
+                if ( typeof text !== 'string' ) { continue; }
+                bin[key] = text;
+            }
+            if ( Object.keys(bin).length === 0 ) { return; }
+            return bin;
+        },
+
+        async set(keyvalStore) {
+            const keys = Object.keys(keyvalStore);
+            if ( keys.length === 0 ) { return; }
+            const promises = [];
+            for ( const key of keys ) {
+                promises.push(setOne(key, keyvalStore[key]));
+            }
+            return Promise.all(promises);
+        },
+
+        async remove(keys) {
+            const toRemove = [];
+            if ( typeof keys === 'string' ) {
+                toRemove.push(removeOne(keys));
+            } else if ( Array.isArray(keys) ) {
+                for ( const key of keys ) {
+                    toRemove.push(removeOne(key));
+                }
+            }
+            return Promise.all(toRemove);
+        },
+
+        async clear() {
+            return globalThis.caches.delete(STORAGE_NAME).catch(reason => {
+                ubolog(reason);
+            });
+        },
+    };
+})();
+
+/*******************************************************************************
+ * 
+ * IndexedDB
+ * 
+ * */
 
 // Reassign API entries to that of indexedDB-based ones
 const selectIDB = async function() {
@@ -219,7 +383,7 @@ const selectIDB = async function() {
             try {
                 req = indexedDB.open(STORAGE_NAME, 1);
                 if ( req.error ) {
-                    console.log(req.error);
+                    ubolog(req.error);
                     req = undefined;
                 }
             } catch(ex) {
@@ -258,7 +422,7 @@ const selectIDB = async function() {
             req.onerror = req.onblocked = function() {
                 if ( resolve === undefined ) { return; }
                 req = undefined;
-                console.log(this.error);
+                ubolog(this.error);
                 db = null;
                 dbPromise = undefined;
                 resolve(null);
@@ -395,8 +559,7 @@ const selectIDB = async function() {
         if ( keys.length === 0 ) { return callback(); }
         const promises = [ getDb() ];
         const entries = [];
-        const dontCompress =
-            µb.hiddenSettings.cacheStorageCompression !== true;
+        const dontCompress = µb.hiddenSettings.cacheStorageCompression !== true;
         for ( const key of keys ) {
             const value = keyvalStore[key];
             const isString = typeof value === 'string';
@@ -486,50 +649,44 @@ const selectIDB = async function() {
 
     cacheStorage.name = 'indexedDB';
     cacheStorage.get = function get(keys) {
-        return storageReadyPromise.then(( ) =>
-            new Promise(resolve => {
-                if ( keys === null ) {
-                    return getAllFromDb(bin => resolve(bin));
-                }
-                let toRead, output = {};
-                if ( typeof keys === 'string' ) {
-                    toRead = [ keys ];
-                } else if ( Array.isArray(keys) ) {
-                    toRead = keys;
-                } else /* if ( typeof keys === 'object' ) */ {
-                    toRead = Object.keys(keys);
-                    output = keys;
-                }
-                getFromDb(toRead, output, bin => resolve(bin));
-            })
-        );
+        return new Promise(resolve => {
+            if ( keys === null ) {
+                return getAllFromDb(bin => resolve(bin));
+            }
+            let toRead, output = {};
+            if ( typeof keys === 'string' ) {
+                toRead = [ keys ];
+            } else if ( Array.isArray(keys) ) {
+                toRead = keys;
+            } else /* if ( typeof keys === 'object' ) */ {
+                toRead = Object.keys(keys);
+                output = keys;
+            }
+            getFromDb(toRead, output, bin => resolve(bin));
+        });
     };
     cacheStorage.set = function set(keys) {
-        return storageReadyPromise.then(( ) =>
-            new Promise(resolve => {
-                putToDb(keys, details => resolve(details));
-            })
-        );
+        return new Promise(resolve => {
+            putToDb(keys, details => resolve(details));
+        });
     };
     cacheStorage.remove = function remove(keys) {
-        return storageReadyPromise.then(( ) =>
-            new Promise(resolve => {
-                deleteFromDb(keys, ( ) => resolve());
-            })
-        );
+        return new Promise(resolve => {
+            deleteFromDb(keys, ( ) => resolve());
+        });
     };
     cacheStorage.clear = function clear() {
-        return storageReadyPromise.then(( ) =>
-            new Promise(resolve => {
-                clearDb(( ) => resolve());
-            })
-        );
+        return new Promise(resolve => {
+            clearDb(( ) => resolve());
+        });
     };
     cacheStorage.getBytesInUse = function getBytesInUse() {
         return Promise.resolve(0);
     };
     return true;
 };
+
+/******************************************************************************/
 
 // https://github.com/uBlockOrigin/uBlock-issues/issues/328
 //   Delete cache-related entries from webext storage.
@@ -541,14 +698,19 @@ const clearWebext = async function() {
         console.error(ex);
     }
     if ( bin instanceof Object === false ) { return; }
+    if ( scuo.canDeserialize(bin.assetCacheRegistry) ) {
+        bin.assetCacheRegistry = scuo.deserialize(bin.assetCacheRegistry);
+    }
     if ( bin.assetCacheRegistry instanceof Object === false ) { return; }
     const toRemove = [
         'assetCacheRegistry',
         'assetSourceRegistry',
+        'compiledMagic',
+        'selfieMagic',
     ];
     for ( const key in bin.assetCacheRegistry ) {
         if ( bin.assetCacheRegistry.hasOwnProperty(key) ) {
-            toRemove.push('cache/' + key);
+            toRemove.push(`cache/${key}`);
         }
     }
     webext.storage.local.remove(toRemove);
