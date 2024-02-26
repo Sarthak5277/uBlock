@@ -60,7 +60,7 @@
  * structure-cloneable data (which is a superset of JSONable data) into a
  * single JS string. The resulting string is meant to be as small as possible.
  * As a result, it is not human-readable, though it contains only printable
- * ASCII characters.
+ * ASCII characters -- and possibly Unicode characters beyond ASCII.
  * 
  * The resulting JS string will not contain characters which require escaping
  * should it be converted to a JSON value. However it may contain characters
@@ -75,11 +75,6 @@
  * - Supports synchronous and asynchronous API
  * - Supports usage of Worker
  * - Optionally supports LZ4 compression
- * 
- * Limits:
- * 
- * - Maximum value for size is uint32. For instance this means an Array, a Set,
- *   a Map, an ArrayBuffer etc. can't have more than 2^32 items.
  * 
  * TODO:
  * 
@@ -744,25 +739,26 @@ const _deserialize = ( ) => {
         }
         case I_SMALL_OBJECT:
         case I_LARGE_OBJECT: {
-            const out = {};
-            let size = type === I_SMALL_OBJECT
+            const entries = [];
+            const size = type === I_SMALL_OBJECT
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
                 : deserializeLargeUint();
-            while ( size-- ) {
+            for ( let i = 0; i < size; i++ ) {
                 const k = _deserialize();
                 const v = _deserialize();
-                out[k] = v;
+                entries.push([ k, v ]);
             }
+            const out = Object.fromEntries(entries);
             readRefs.set(refCounter++, out);
             return out;
         }
         case I_ARRAY_SMALL:
         case I_ARRAY_LARGE: {
             const out = [];
-            let size = type === I_ARRAY_SMALL
+            const size = type === I_ARRAY_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
                 : deserializeLargeUint();
-            while ( size-- ) {
+            for ( let i = 0; i < size; i++ ) {
                 out.push(_deserialize());
             }
             readRefs.set(refCounter++, out);
@@ -771,10 +767,10 @@ const _deserialize = ( ) => {
         case I_SET_SMALL:
         case I_SET_LARGE: {
             const entries = [];
-            let size = type === I_SET_SMALL
+            const size = type === I_SET_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
                 : deserializeLargeUint();
-            while ( size-- ) {
+            for ( let i = 0; i < size; i++ ) {
                 entries.push(_deserialize());
             }
             const out = new Set(entries);
@@ -784,10 +780,10 @@ const _deserialize = ( ) => {
         case I_MAP_SMALL:
         case I_MAP_LARGE: {
             const entries = [];
-            let size = type === I_MAP_SMALL
+            const size = type === I_MAP_SMALL
                 ? charCodeToInt[readStr.charCodeAt(readPtr++)]
                 : deserializeLargeUint();
-            while ( size-- ) {
+            for ( let i = 0; i < size; i++ ) {
                 const k = _deserialize();
                 const v = _deserialize();
                 entries.push([ k, v ]);

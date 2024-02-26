@@ -770,7 +770,7 @@ async function assetCacheWrite(assetKey, content, options = {}) {
     return result;
 }
 
-async function assetCacheRemove(pattern) {
+async function assetCacheRemove(pattern, options = {}) {
     const cacheDict = await getAssetCacheRegistry();
     const removedEntries = [];
     const removedContent = [];
@@ -781,8 +781,19 @@ async function assetCacheRemove(pattern) {
             if ( assetKey !== pattern ) { continue; }
         }
         removedEntries.push(assetKey);
-        removedContent.push('cache/' + assetKey);
+        removedContent.push(`cache/${assetKey}`);
         delete cacheDict[assetKey];
+    }
+    if ( options.janitor && pattern instanceof RegExp ) {
+        const re = new RegExp(
+            pattern.source.replace(/^\^/, 'cache\/'),
+            pattern.flags
+        );
+        const keys = await cacheStorage.keys(re);
+        for ( const key of keys ) {
+            removedContent.push(key);
+            ubolog(`Removing stray ${key}`);
+        }
     }
     if ( removedContent.length !== 0 ) {
         await Promise.all([
@@ -1125,8 +1136,8 @@ assets.metadata = async function() {
 
 assets.purge = assetCacheMarkAsDirty;
 
-assets.remove = function(pattern) {
-    return assetCacheRemove(pattern);
+assets.remove = function(...args) {
+    return assetCacheRemove(...args);
 };
 
 assets.rmrf = function() {

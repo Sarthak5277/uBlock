@@ -139,7 +139,7 @@ const initializeTabs = async ( ) => {
 // https://www.reddit.com/r/uBlockOrigin/comments/s7c9go/
 //   Abort suspending network requests when uBO is merely being installed.
 
-const onVersionReady = lastVersion => {
+const onVersionReady = async lastVersion => {
     if ( lastVersion === vAPI.app.version ) { return; }
 
     vAPI.storage.set({
@@ -153,6 +153,11 @@ const onVersionReady = lastVersion => {
     if ( lastVersionInt === 0 ) {
         vAPI.net.unsuspend({ all: true, discard: true });
         return;
+    }
+
+    // Migrate cache storage
+    if ( lastVersionInt < vAPI.app.intFromVersion('1.56.1b1') ) {
+        await cacheStorage.migrate(µb.hiddenSettings.cacheStorageAPI);
     }
 
     // Since built-in resources may have changed since last version, we
@@ -263,7 +268,7 @@ const onCacheSettingsReady = async (fetched = {}) => {
         ubolog(`Serialized format of selfie changed`);
     }
     if ( selfieIsInvalid === false ) { return; }
-    µb.selfieManager.destroy();
+    µb.selfieManager.destroy({ janitor: true });
     cacheStorage.set(µb.systemSettings);
 };
 
@@ -386,17 +391,9 @@ try {
     const adminExtra = await vAPI.adminStorage.get('toAdd');
     ubolog(`Extra admin settings ready ${Date.now()-vAPI.T0} ms after launch`);
 
-    // https://github.com/uBlockOrigin/uBlock-issues/issues/1365
-    //   Wait for onCacheSettingsReady() to be fully ready.
     const [ , , lastVersion ] = await Promise.all([
         µb.loadSelectedFilterLists().then(( ) => {
             ubolog(`List selection ready ${Date.now()-vAPI.T0} ms after launch`);
-        }),
-        cacheStorage.get(
-            { compiledMagic: 0, selfieMagic: 0 }
-        ).then(fetched => {
-            ubolog(`Cache magic numbers ready ${Date.now()-vAPI.T0} ms after launch`);
-            onCacheSettingsReady(fetched);
         }),
         vAPI.storage.get(createDefaultProps()).then(fetched => {
             ubolog(`First fetch ready ${Date.now()-vAPI.T0} ms after launch`);
@@ -411,6 +408,11 @@ try {
             ubolog(`PSL ready ${Date.now()-vAPI.T0} ms after launch`);
         }),
     ]);
+
+    await cacheStorage.get({ compiledMagic: 0, selfieMagic: 0 }).then(bin => {
+        ubolog(`Cache magic numbers ready ${Date.now()-vAPI.T0} ms after launch`);
+        onCacheSettingsReady(bin);
+    });
 
     // https://github.com/uBlockOrigin/uBlock-issues/issues/1547
     if ( lastVersion === '0.0.0.0' && vAPI.webextFlavor.soup.has('chromium') ) {

@@ -1304,9 +1304,9 @@ onBroadcast(msg => {
         return false;
     };
 
-    const destroy = function() {
+    const destroy = function(options = {}) {
         if ( µb.selfieIsInvalid === false ) {
-            io.remove(/^selfie\//);
+            io.remove(/^selfie\//, options);
             µb.selfieIsInvalid = true;
             ubolog(`Selfie was removed`);
         }
