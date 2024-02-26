@@ -531,6 +531,7 @@ function getAssetSourceRegistry() {
             if ( bin instanceof Object ) {
                 if ( bin.assetSourceRegistry instanceof Object ) {
                     assetSourceRegistry = bin.assetSourceRegistry;
+                    ubolog('Loaded assetSourceRegistry');
                     return assetSourceRegistry;
                 }
             }
@@ -542,6 +543,7 @@ function getAssetSourceRegistry() {
                     : assets.fetchText(µb.assetsJsonPath);
             }).then(details => {
                 updateAssetSourceRegistry(details.content, true);
+                ubolog('Loaded assetSourceRegistry');
                 return assetSourceRegistry;
             });
         });
@@ -683,6 +685,7 @@ function getAssetCacheRegistry() {
         if ( Object.keys(assetCacheRegistry).length !== 0 ) {
             return console.error('getAssetCacheRegistry(): assetCacheRegistry reassigned!');
         }
+        ubolog('Loaded assetCacheRegistry');
         assetCacheRegistry = bin.assetCacheRegistry;
     }).then(( ) =>
         assetCacheRegistry

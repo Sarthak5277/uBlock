@@ -27,41 +27,14 @@
 
 import lz4Codec from './lz4.js';
 import webext from './webext.js';
+import µb from './background.js';
 import { ubolog } from './console.js';
 import * as scuo from './scuo-serializer.js';
 
 /******************************************************************************/
 
-// The code below has been originally manually imported from:
-// Commit: https://github.com/nikrolls/uBlock-Edge/commit/d1538ea9bea89d507219d3219592382eee306134
-// Commit date: 29 October 2016
-// Commit author: https://github.com/nikrolls
-// Commit message: "Implement cacheStorage using IndexedDB"
-
-// The original imported code has been subsequently modified as it was not
-// compatible with Firefox.
-// (a Promise thing, see https://github.com/dfahlander/Dexie.js/issues/317)
-// Furthermore, code to migrate from browser.storage.local to vAPI.storage
-// has been added, for seamless migration of cache-related entries into
-// indexedDB.
-
-// https://bugzilla.mozilla.org/show_bug.cgi?id=1371255
-//   Firefox-specific: we use indexedDB because browser.storage.local() has
-//   poor performance in Firefox.
-// https://github.com/uBlockOrigin/uBlock-issues/issues/328
-//   Use IndexedDB for Chromium as well, to take advantage of LZ4
-//   compression.
-// https://github.com/uBlockOrigin/uBlock-issues/issues/399
-//   Revert Chromium support of IndexedDB, use advanced setting to force
-//   IndexedDB.
-// https://github.com/uBlockOrigin/uBlock-issues/issues/409
-//   Allow forcing the use of webext storage on Firefox.
-
 const STORAGE_NAME = 'uBlock0CacheStorage';
-
-// Default to webext storage.
-const storageLocal = webext.storage.local;
-
+const extensionStorage = webext.storage.local;
 
 const keysFromGetArg = arg => {
     if ( arg === null || arg === undefined ) { return []; }
@@ -95,13 +68,14 @@ const shouldCache = bin => {
 
 const cacheStorage = (( ) => {
 
-    const LARGE = 16384;
+    const LARGE = 65536;
 
     const compress = async (key, data) => {
         const isLarge = typeof data === 'string' && data.length >= LARGE;
+        const µbhs = µb.hiddenSettings;
         const after = await scuo.serializeAsync(data, {
-            compress: isLarge,
-            multithreaded: isLarge,
+            compress: isLarge && µbhs.cacheStorageCompression,
+            multithreaded: isLarge && µbhs.cacheStorageMultithread || 0,
         });
         return { key, data: after };
     };
@@ -112,7 +86,7 @@ const cacheStorage = (( ) => {
         }
         const isLarge = data.length >= LARGE;
         const after = await scuo.deserializeAsync(data, {
-            multithreaded: isLarge,
+            multithreaded: isLarge && µb.hiddenSettings.cacheStorageMultithread || 0,
         });
         return { key, data: after };
     };
@@ -124,7 +98,7 @@ const cacheStorage = (( ) => {
             const keys = arg;
             return cacheAPI.get(keysFromGetArg(arg)).then(bin => {
                 if ( bin !== undefined ) { return bin; }
-                return storageLocal.get(keys).catch(reason => {
+                return extensionStorage.get(keys).catch(reason => {
                     ubolog(reason);
                 });
             }).then(bin => {
@@ -148,7 +122,7 @@ const cacheStorage = (( ) => {
         async keys(regex) {
             const results = await Promise.all([
                 cacheAPI.keys(regex),
-                storageLocal.get(null).catch(( ) => {}),
+                extensionStorage.get(null).catch(( ) => {}),
             ]);
             const keys = new Set(results[0]);
             const bin = results[1] || {};
@@ -172,21 +146,21 @@ const cacheStorage = (( ) => {
                 serializedStore[key] = data;
             }
             cacheAPI.set(shouldCache(serializedStore));
-            return storageLocal.set(serializedStore).catch(reason => {
+            return extensionStorage.set(serializedStore).catch(reason => {
                 ubolog(reason);
             });
         },
 
         remove(...args) {
             cacheAPI.remove(...args);
-            return storageLocal.remove(...args).catch(reason => {
+            return extensionStorage.remove(...args).catch(reason => {
                 ubolog(reason);
             });
         },
 
         clear(...args) {
             cacheAPI.clear(...args);
-            return storageLocal.clear(...args).catch(reason => {
+            return extensionStorage.clear(...args).catch(reason => {
                 ubolog(reason);
             });
         },
@@ -195,20 +169,19 @@ const cacheStorage = (( ) => {
             if ( cacheAPI === 'browser.storage.local' ) { return; }
             if ( cacheAPI !== 'indexedDB' ) {
                 if ( vAPI.webextFlavor.soup.has('firefox') === false ) { return; }
-                if ( browser.extension.inIncognitoContext !== true ) { return; }
             }
+            if ( browser.extension.inIncognitoContext ) { return; }
             // Copy all items to new cache storage
-            const bin = idbStorage.get(null);
+            const bin = await idbStorage.get(null);
             if ( typeof bin !== 'object' || bin === null ) { return; }
-            const toMigrate = {};
+            const toMigrate = [];
             for ( const key of Object.keys(bin) ) {
                 if ( key.startsWith('cache/selfie/') ) { continue; }
-                toMigrate[key] = bin[key]; 
+                ubolog(`Migrating ${key}=${JSON.stringify(bin[key]).slice(0,32)}`);
+                toMigrate.push(cacheStorage.set({ [key]: bin[key] }));
             }
-            if ( Object.keys(toMigrate).length !== 0 ) {
-                await cacheStorage.set(toMigrate);
-            }
-            return idbStorage.clear();
+            idbStorage.clear();
+            return Promise.all(toMigrate);
         },
 
         error: undefined
@@ -216,9 +189,9 @@ const cacheStorage = (( ) => {
 })();
 
 // Not all platforms support getBytesInUse
-if ( storageLocal.getBytesInUse instanceof Function ) {
+if ( extensionStorage.getBytesInUse instanceof Function ) {
     cacheStorage.getBytesInUse = function(...args) {
-        return storageLocal.getBytesInUse(...args).catch(reason => {
+        return extensionStorage.getBytesInUse(...args).catch(reason => {
             ubolog(reason);
         });
     };
@@ -228,16 +201,21 @@ if ( storageLocal.getBytesInUse instanceof Function ) {
  * 
  * Cache API
  * 
- * May not be available/populated in private/incognito mode.
+ * Purpose is to mirror cache-related items from extension storage, as its
+ * read/write operations are faster. May not be available/populated in
+ * private/incognito mode.
  * 
  * */
 
 const cacheAPI = (( ) => {
+    const caches = globalThis.caches;
     const cacheStoragePromise = new Promise(resolve => {
-        if ( globalThis.caches instanceof Object === false ) {
+        if ( typeof caches !== 'object' || caches === null ) {
+            ubolog('CacheStorage API not available');
             resolve(null);
+            return;
         }
-        resolve(globalThis.caches.open(STORAGE_NAME).catch(reason => {
+        resolve(caches.open(STORAGE_NAME).catch(reason => {
             ubolog(reason);
         }));
     });
@@ -377,16 +355,15 @@ const cacheAPI = (( ) => {
  * 
  * IndexedDB
  * 
+ * Deprecated, exists only for the purpose of migrating from older versions.
+ * 
  * */
 
-// Reassign API entries to that of indexedDB-based ones
-const idbStorage = async function() {
+const idbStorage = (( ) => {
     let dbPromise;
 
     const getDb = function() {
-        if ( dbPromise !== undefined ) {
-            return dbPromise;
-        }
+        if ( dbPromise !== undefined ) { return dbPromise; }
         dbPromise = new Promise(resolve => {
             let req;
             try {
@@ -491,7 +468,7 @@ const idbStorage = async function() {
             if ( entry.value instanceof Blob === false ) { return; }
             promises.push(decompress(keyvalStore, key, value));
         }).catch(reason => {
-            console.info(`cacheStorage.getAllFromDb() failed: ${reason}`);
+            ubolog(`cacheStorage.getAllFromDb() failed: ${reason}`);
             callback();
         });
     };
@@ -505,23 +482,17 @@ const idbStorage = async function() {
             if ( !db ) { return callback(); }
             db.close();
             indexedDB.deleteDatabase(STORAGE_NAME);
+            callback();
         }
         catch(reason) {
             callback();
         }
     };
 
-    {
-        const db = await getDb();
-        if ( !db ) { return; }
-    }
-
     return {
-        get: function get(keys) {
+        get: function get() {
             return new Promise(resolve => {
-                if ( keys === null ) {
-                    return getAllFromDb(bin => resolve(bin));
-                }
+                return getAllFromDb(bin => resolve(bin));
             });
         },
         clear: function clear() {
@@ -530,7 +501,7 @@ const idbStorage = async function() {
             });
         },
     };
-};
+})();
 
 /******************************************************************************/
 

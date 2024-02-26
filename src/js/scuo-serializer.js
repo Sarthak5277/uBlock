@@ -1106,12 +1106,10 @@ export const canDeserialize = s =>
  * */
 
 const defaultConfig = {
-    maxThreadCount: 2,
     threadTTL: 5000,
 };
 
 const validateConfig = {
-    maxThreadCount: val => val > 0,
     threadTTL: val => val > 0,
 };
 
@@ -1234,12 +1232,12 @@ class Thread {
 
 const threads = {
     pool: [],
-    getThread() {
+    thread(maxPoolSize) {
         for ( const thread of this.pool ) {
             if ( thread.jobs.size === 0 ) { return thread; }
         }
         const len = this.pool.length;
-        if ( len !== 0 && len === currentConfig.maxThreadCount ) {
+        if ( len !== 0 && len >= maxPoolSize ) {
             if ( len === 1 ) { return this.pool[0]; }
             return this.pool.reduce((best, candidate) =>
                 candidate.jobs.size < best.jobs.size ? candidate : best
@@ -1253,28 +1251,28 @@ const threads = {
         this.pool.push(thread);
         return thread;
     },
-    async serialize(data, options) {
-        return this.getThread().serialize(data, options);
-    },
-    async deserialize(data, options) {
-        return this.getThread().deserialize(data, options);
-    },
 };
 
 export async function serializeAsync(data, options = {}) {
-    if ( options.multithreaded !== true ) {
+    const maxThreadCount = options.multithreaded || 0;
+    if ( maxThreadCount === 0 ) {
         return serialize(data, options);
     }
-    const result = await threads.serialize(data, options);
+    const result = await threads
+        .thread(maxThreadCount)
+        .serialize(data, options);
     if ( result !== undefined ) { return result; }
     return serialize(data, options);
 }
 
 export async function deserializeAsync(data, options = {}) {
-    if ( options.multithreaded !== true ) {
+    const maxThreadCount = options.multithreaded || 0;
+    if ( maxThreadCount === 0 ) {
         return deserialize(data, options);
     }
-    const result = await threads.deserialize(data, options);
+    const result = await threads
+        .thread(maxThreadCount)
+        .deserialize(data, options);
     if ( result !== undefined ) { return result; }
     return deserialize(data, options);
 }

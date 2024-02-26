@@ -335,7 +335,6 @@ const onFirstFetchReady = (fetched, adminExtra) => {
     sessionSwitches.assign(permanentSwitches);
 
     onNetWhitelistReady(fetched.netWhitelist, adminExtra);
-    onVersionReady(fetched.version);
 };
 
 /******************************************************************************/
@@ -391,14 +390,19 @@ try {
     const adminExtra = await vAPI.adminStorage.get('toAdd');
     ubolog(`Extra admin settings ready ${Date.now()-vAPI.T0} ms after launch`);
 
-    const [ , , lastVersion ] = await Promise.all([
+    const lastVersion = await vAPI.storage.get(createDefaultProps()).then(async fetched => {
+        ubolog(`Version ready ${Date.now()-vAPI.T0} ms after launch`);
+        await onVersionReady(fetched.version);
+        return fetched;
+    }).then(fetched => {
+        ubolog(`First fetch ready ${Date.now()-vAPI.T0} ms after launch`);
+        onFirstFetchReady(fetched, adminExtra);
+        return fetched.version;
+    });
+
+    await Promise.all([
         µb.loadSelectedFilterLists().then(( ) => {
             ubolog(`List selection ready ${Date.now()-vAPI.T0} ms after launch`);
-        }),
-        vAPI.storage.get(createDefaultProps()).then(fetched => {
-            ubolog(`First fetch ready ${Date.now()-vAPI.T0} ms after launch`);
-            onFirstFetchReady(fetched, adminExtra);
-            return fetched.version;
         }),
         µb.loadUserSettings().then(fetched => {
             ubolog(`User settings ready ${Date.now()-vAPI.T0} ms after launch`);
@@ -407,12 +411,11 @@ try {
         µb.loadPublicSuffixList().then(( ) => {
             ubolog(`PSL ready ${Date.now()-vAPI.T0} ms after launch`);
         }),
+        cacheStorage.get({ compiledMagic: 0, selfieMagic: 0 }).then(bin => {
+            ubolog(`Cache magic numbers ready ${Date.now()-vAPI.T0} ms after launch`);
+            onCacheSettingsReady(bin);
+        }),
     ]);
-
-    await cacheStorage.get({ compiledMagic: 0, selfieMagic: 0 }).then(bin => {
-        ubolog(`Cache magic numbers ready ${Date.now()-vAPI.T0} ms after launch`);
-        onCacheSettingsReady(bin);
-    });
 
     // https://github.com/uBlockOrigin/uBlock-issues/issues/1547
     if ( lastVersion === '0.0.0.0' && vAPI.webextFlavor.soup.has('chromium') ) {
