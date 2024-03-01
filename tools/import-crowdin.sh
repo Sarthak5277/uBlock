@@ -1,51 +1,67 @@
-#!/usr/bin/env bash
-#
-# This script assumes a linux environment
+! Title: Hide YouTube Shorts
+! Description: Hide all traces of YouTube shorts videos on YouTube
+! Version: 1.8.0
+! Last modified: 2023-01-08 20:02
+! Expires: 2 weeks (update frequency)
+! Homepage: https://github.com/gijsdev/ublock-hide-yt-shorts
+! License: https://github.com/gijsdev/ublock-hide-yt-shorts/blob/master/LICENSE.md
 
-set -e
+! Hide all videos containing the phrase "#shorts"
+youtube.com##ytd-grid-video-renderer:has(#video-title:has-text(#shorts))
+youtube.com##ytd-grid-video-renderer:has(#video-title:has-text(#Shorts))
+youtube.com##ytd-grid-video-renderer:has(#video-title:has-text(#short))
+youtube.com##ytd-grid-video-renderer:has(#video-title:has-text(#Short))
 
-echo "*** uBlock: Importing from Crowdin archive"
+! Hide all videos with the shorts indicator on the thumbnail
+youtube.com##ytd-grid-video-renderer:has([overlay-style="SHORTS"])
+youtube.com##ytd-rich-item-renderer:has([overlay-style="SHORTS"])
+youtube.com##ytd-video-renderer:has([overlay-style="SHORTS"])
+youtube.com##ytd-item-section-renderer.ytd-section-list-renderer[page-subtype="subscriptions"]:has(ytd-video-renderer:has([overlay-style="SHORTS"]))
 
-SRC=~/Downloads/crowdin
-rm -r $SRC || true > /dev/null
-unzip -q ~/Downloads/uBlock\ \(translations\).zip -d $SRC
+! Hide shorts button in sidebar
+youtube.com##ytd-guide-entry-renderer:has-text(Shorts)
+youtube.com##ytd-mini-guide-entry-renderer:has-text(Shorts)
 
-# https://www.assertnotmagic.com/2018/06/20/bash-brackets-quick-reference/
+! Hide shorts section on homepage
+youtube.com##ytd-rich-section-renderer:has(#rich-shelf-header:has-text(Shorts))
+youtube.com##ytd-reel-shelf-renderer:has(.ytd-reel-shelf-renderer:has-text(Shorts))
 
-DES=./src/_locales
-DESMV3=./platform/mv3/extension/_locales
+! Hide shorts tab on channel pages
+! Old style
+youtube.com##tp-yt-paper-tab:has(.tp-yt-paper-tab:has-text(Shorts))
+! New style (2023-10)
+youtube.com##yt-tab-shape:has-text(/^Shorts$/)
 
-for dir in $SRC/*/; do
-  srclang=$(basename $dir)
-  deslang=${srclang/-/_}
-  deslang=${deslang%_AM}
-  deslang=${deslang%_ES}
-  deslang=${deslang%_IN}
-  deslang=${deslang%_LK}
-  deslang=${deslang%_NL}
-  deslang=${deslang%_PK}
-  deslang=${deslang%_SE}
-  if [[ $deslang == 'en' ]]; then
-    continue
-  fi
-  # ubo
-  mkdir -p "$DES/$deslang/" && cp "$SRC/$srclang/messages.json" "$DES/$deslang/"
-  # ubo lite
-  mkdir -p "$DESMV3/$deslang/" && cp "$SRC/$srclang/uBO-Lite/messages.json" "$DESMV3/$deslang/"
-  # descriptions
-  #cp "$SRC/$srclang/description.txt" "./dist/description/description-${deslang}.txt"
-  cp "$SRC/$srclang/uBO-Lite/webstore.txt" "./platform/mv3/description/webstore.$deslang.txt"
-done
+! Hide shorts in video descriptions
+youtube.com##ytd-reel-shelf-renderer.ytd-structured-description-content-renderer:has-text("Shorts remixing this video")
 
-# Output files with possible misuse of `$`, as this can lead to severe
-# consequences, such as not being able to run the extension at all.
-# uBO does not use `$`, so any instance of `$` must be investigated.
-# See https://issues.adblockplus.org/ticket/6666
-echo "*** uBlock: Instances of '\$':"
-grep -FR "$" $DES/ || true
-grep -FR "$" $DESMV3/ || true
+! Remove empty spaces in grid
+youtube.com##ytd-rich-grid-row,#contents.ytd-rich-grid-row:style(display: contents !important)
 
 
-rm -r $SRC
-echo "*** uBlock: Import done."
-git status
+!!! MOBILE !!!
+
+! Hide all videos in home feed containing the phrase "#shorts"
+m.youtube.com##ytm-rich-item-renderer:has(#video-title:has-text(#shorts))
+m.youtube.com##ytm-rich-item-renderer:has(#video-title:has-text(#Shorts))
+m.youtube.com##ytm-rich-item-renderer:has(#video-title:has-text(#short))
+m.youtube.com##ytm-rich-item-renderer:has(#video-title:has-text(#Short))
+
+! Hide all videos in subscription feed containing the phrase "#shorts"
+m.youtube.com##ytm-item-section-renderer:has(#video-title:has-text(#shorts))
+m.youtube.com##ytm-item-section-renderer:has(#video-title:has-text(#Shorts))
+m.youtube.com##ytm-item-section-renderer:has(#video-title:has-text(#short))
+m.youtube.com##ytm-item-section-renderer:has(#video-title:has-text(#Short))
+
+! Hide shorts button in the bottom navigation bar
+m.youtube.com##ytm-pivot-bar-item-renderer:has(.pivot-shorts)
+
+! Hide all videos with the shorts indicator on the thumbnail
+m.youtube.com##ytm-video-with-context-renderer:has([data-style="SHORTS"])
+
+! Hide shorts sections
+m.youtube.com##ytm-rich-section-renderer:has(ytm-reel-shelf-renderer:has(.reel-shelf-title-wrapper:has-text(Shorts)))
+m.youtube.com##ytm-reel-shelf-renderer.item:has(.reel-shelf-title-wrapper:has-text(Shorts))
+
+! Hide shorts tab on channel pages
+m.youtube.com##.single-column-browse-results-tabs>a:has-text(Shorts)
