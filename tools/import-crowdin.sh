@@ -1,51 +1,20 @@
-#!/usr/bin/env bash
-#
-# This script assumes a linux environment
-
-set -e
-
-echo "*** uBlock: Importing from Crowdin archive"
-
-SRC=~/Downloads/crowdin
-rm -r $SRC || true > /dev/null
-unzip -q ~/Downloads/uBlock\ \(translations\).zip -d $SRC
-
-# https://www.assertnotmagic.com/2018/06/20/bash-brackets-quick-reference/
-
-DES=./src/_locales
-DESMV3=./platform/mv3/extension/_locales
-
-for dir in $SRC/*/; do
-  srclang=$(basename $dir)
-  deslang=${srclang/-/_}
-  deslang=${deslang%_AM}
-  deslang=${deslang%_ES}
-  deslang=${deslang%_IN}
-  deslang=${deslang%_LK}
-  deslang=${deslang%_NL}
-  deslang=${deslang%_PK}
-  deslang=${deslang%_SE}
-  if [[ $deslang == 'en' ]]; then
-    continue
-  fi
-  # ubo
-  mkdir -p "$DES/$deslang/" && cp "$SRC/$srclang/messages.json" "$DES/$deslang/"
-  # ubo lite
-  mkdir -p "$DESMV3/$deslang/" && cp "$SRC/$srclang/uBO-Lite/messages.json" "$DESMV3/$deslang/"
-  # descriptions
-  #cp "$SRC/$srclang/description.txt" "./dist/description/description-${deslang}.txt"
-  cp "$SRC/$srclang/uBO-Lite/webstore.txt" "./platform/mv3/description/webstore.$deslang.txt"
-done
-
-# Output files with possible misuse of `$`, as this can lead to severe
-# consequences, such as not being able to run the extension at all.
-# uBO does not use `$`, so any instance of `$` must be investigated.
-# See https://issues.adblockplus.org/ticket/6666
-echo "*** uBlock: Instances of '\$':"
-grep -FR "$" $DES/ || true
-grep -FR "$" $DESMV3/ || true
-
-
-rm -r $SRC
-echo "*** uBlock: Import done."
-git status
+www.youtube.com##ytd-guide-renderer a.yt-simple-endpoint path[d^="M10 14.65v-5.3L15 12l-5 2.65zm7.77-4.33"]:upward(ytd-guide-entry-renderer)
+www.youtube.com##ytd-mini-guide-renderer a.yt-simple-endpoint path[d^="M10 14.65v-5.3L15 12l-5 2.65zm7.77-4.33"]:upward(ytd-mini-guide-entry-renderer)
+www.youtube.com##ytd-browse[page-subtype="home"] .ytd-thumbnail[href^="/shorts/"]:upward(ytd-rich-item-renderer)
+www.youtube.com##ytd-browse[page-subtype="subscriptions"] .ytd-thumbnail[href^="/shorts/"]:upward(ytd-grid-video-renderer,ytd-rich-item-renderer)
+www.youtube.com##ytd-search .ytd-thumbnail[href^="/shorts/"]:upward(ytd-video-renderer)
+www.youtube.com##ytd-browse[page-subtype="subscriptions"] ytd-video-renderer .ytd-thumbnail[href^="/shorts/"]:upward(ytd-item-section-renderer)
+www.youtube.com##ytd-watch-next-secondary-results-renderer .ytd-thumbnail[href^="/shorts/"]:upward(ytd-compact-video-renderer,ytd-shelf-renderer)
+www.youtube.com##ytd-browse[page-subtype="trending"] .ytd-thumbnail[href^="/shorts/"]:upward(ytd-video-renderer)
+www.youtube.com##ytd-search .ytd-thumbnail[href^="/shorts/"]:upward(ytd-video-renderer)
+www.youtube.com##ytd-notification-renderer:has(> a[href^="/shorts/"])
+www.youtube.com##ytd-rich-shelf-renderer[is-shorts]
+www.youtube.com##ytd-rich-shelf-renderer[is-shorts].ytd-rich-section-renderer:upward(ytd-rich-section-renderer)
+www.youtube.com##ytd-reel-shelf-renderer
+m.youtube.com##ytm-reel-shelf-renderer
+m.youtube.com##ytm-pivot-bar-renderer div.pivot-shorts:upward(ytm-pivot-bar-item-renderer)
+m.youtube.com##ytm-browse ytm-item-section-renderer ytm-thumbnail-overlay-time-status-renderer[data-style="SHORTS"]:upward(ytm-video-with-context-renderer)
+m.youtube.com##ytm-browse ytm-item-section-renderer ytm-thumbnail-overlay-time-status-renderer[data-style="SHORTS"]:upward(ytm-compact-video-renderer)
+m.youtube.com##ytm-search ytm-thumbnail-overlay-time-status-renderer[data-style="SHORTS"]:upward(ytm-compact-video-renderer,ytm-video-with-context-renderer)
+m.youtube.com##ytm-single-column-watch-next-results-renderer ytm-thumbnail-overlay-time-status-renderer span:has-text(/^(0:\d\d|1:0\d)$/):upward(ytm-video-with-context-renderer)
+youtube.com##ytd-rich-grid-row, #contents.ytd-rich-grid-row:style(display:contents !important;)
